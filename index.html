@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pintura en el aire v2 · Dibujo AR con gestos y lápiz</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+
+<!--
+  MediaPipe Tasks Vision (HandLandmarker) se carga con import() dinámico
+  dentro de start(), para poder mostrar un error claro si falla el CDN.
+-->
+
+<style>
+  :root {
+    --ink: rgba(17, 22, 40, 0.74);
+    --ink-solid: #111628;
+    --line: rgba(255, 255, 255, 0.14);
+    --text: #f4f2ee;
+    --muted: #a9b0c4;
+    --draw: #6ff0c8;
+    --erase: #ff9466;
+    --color: #c89bff;
+    --size: #ffd34d;
+    --pause: #a9b0c4;
+    --danger: #ff4867;
+    --mode: var(--pause);
+    --font: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #000; color: var(--text); font-family: var(--font); overflow: hidden; }
+  button, input { font-family: inherit; }
+  button:focus-visible, input:focus-visible { outline: 3px solid var(--draw); outline-offset: 2px; }
+
+  /* ---------- ESCENARIO: video + canvas superpuestos y en espejo ---------- */
+  .stage { position: fixed; inset: 0; background: #000; }
+  .stage video, .stage canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; transform: scaleX(-1);
+  }
+  #overlayCanvas { pointer-events: none; }
+
+  /* ---------- HUD ---------- */
+  .hud {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+    max-width: calc(100% - 20px);
+    padding: 8px 8px 8px 14px;
+    background: var(--ink); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--line); border-top: 3px solid var(--mode); border-radius: 20px;
+    z-index: 20; box-shadow: 0 18px 50px rgba(0,0,0,.45);
+    transition: border-color .25s ease, opacity .3s ease;
+  }
+  .hud.hidden { opacity: 0; pointer-events: none; }
+  .hud-item { display: flex; align-items: center; gap: 9px; }
+  .hud-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .hud-label { font-size: 11px; color: var(--muted); }
+  .hud-value { font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .divider { width: 1px; height: 34px; background: var(--line); }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,.9); box-shadow: 0 0 14px currentColor; flex: none; }
+  .size-box { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,.07); }
+  .size-dot { border-radius: 50%; background: #fff; }
+  .brush-icon { font-size: 22px; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: rgba(255,255,255,.07); }
+  .mode { display: flex; align-items: center; gap: 9px; padding: 7px 13px; border-radius: 999px; background: rgba(255,255,255,.07); min-width: 190px; }
+  .mode-icon { font-size: 18px; }
+  .mode .hud-value { color: var(--mode); }
+  .btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn {
+    border: 1px solid var(--line); background: rgba(255,255,255,.08); color: var(--text);
+    padding: 9px 12px; border-radius: 13px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background .15s ease, transform .1s ease; white-space: nowrap;
+  }
+  .btn:hover { background: rgba(255,255,255,.16); }
+  .btn:active { transform: scale(.96); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.on { background: var(--draw); color: #08261d; border-color: transparent; }
+  .btn-danger { background: var(--danger); border-color: transparent; color: #fff; }
+  .btn-danger:hover { background: #ff6680; }
+  .btn-primary { background: var(--draw); color: #08261d; border-color: transparent; }
+  .btn-sq { min-width: 40px; }
+
+  /* ---------- MEDIDOR DE GROSOR ---------- */
+  .gauge {
+    position: fixed; right: 22px; top: 50%; transform: translateY(-50%);
+    height: 40vh; width: 70px; z-index: 15;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    opacity: 0; transition: opacity .2s ease; pointer-events: none;
+  }
+  .gauge.show { opacity: 1; }
+  .gauge-track { flex: 1; width: 16px; border-radius: 999px; position: relative; overflow: hidden; background: var(--ink); border: 1px solid var(--line); }
+  .gauge-fill { position: absolute; bottom: 0; left: 0; right: 0; height: 0%; background: linear-gradient(to top, var(--size), #fff3c2); border-radius: 999px; }
+  .gauge-value { font-weight: 800; font-size: 18px; color: var(--size); background: var(--ink); padding: 4px 10px; border-radius: 10px; }
+  .gauge-hint { font-size: 12px; color: var(--muted); text-align: center; text-shadow: 0 1px 6px #000; }
+
+  /* ---------- PANELES ---------- */
+  .panel {
+    position: fixed; z-index: 16;
+    background: var(--ink); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px;
+    transition: opacity .2s ease, transform .2s ease;
+  }
+  .panel.hidden { opacity: 0; transform: translateY(10px); pointer-events: none; }
+  .panel h2 { font-size: 15px; font-weight: 800; margin-bottom: 10px; }
+
+  .legend { left: 16px; bottom: 16px; width: 300px; max-height: calc(100vh - 140px); overflow-y: auto; }
+  .legend ul { list-style: none; display: grid; gap: 7px; }
+  .legend li { display: grid; grid-template-columns: 30px 1fr; align-items: center; gap: 8px; font-size: 13px; line-height: 1.25; }
+  .legend .g { font-size: 19px; text-align: center; }
+  .legend b { font-weight: 600; }
+  .legend small { color: var(--muted); display: block; }
+  .legend .keys { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.7; }
+  kbd { font-family: inherit; background: rgba(255,255,255,.12); border-radius: 5px; padding: 1px 6px; color: var(--text); }
+
+  .settings { right: 16px; top: 120px; width: 300px; }
+  .settings .row { margin-bottom: 14px; }
+  .settings .row-head { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .settings output { color: var(--draw); }
+  .settings input[type=range] { width: 100%; accent-color: var(--draw); }
+  .settings small { display: block; color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 2px; }
+  .settings .check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 10px; cursor: pointer; }
+  .settings .perf { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+
+  .pencil-panel { right: 16px; bottom: 16px; width: 340px; }
+  .pencil-panel .pp-text { font-size: 13px; line-height: 1.45; color: #dfe3ee; margin-bottom: 10px; }
+  .pencil-panel .pp-warn { font-size: 12.5px; line-height: 1.4; color: #ffd0a8; margin-bottom: 10px; display: none; }
+  .pencil-panel .pp-warn.show { display: block; }
+  .pencil-panel .pp-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mask-wrap { position: relative; margin-bottom: 10px; border-radius: 10px; overflow: hidden; background: #05070f; border: 1px solid var(--line); }
+  .mask-wrap canvas { display: block; width: 100%; transform: scaleX(-1); image-rendering: pixelated; }
+  .mask-wrap span { position: absolute; left: 8px; top: 6px; font-size: 11px; color: var(--muted); }
+  .target-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .target-chip i { width: 14px; height: 14px; border-radius: 50%; display: inline-block; border: 1px solid #fff; }
+
+  /* ---------- TOAST ---------- */
+  .toast {
+    position: fixed; top: 112px; left: 50%; transform: translate(-50%, -12px); opacity: 0;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--ink-solid); border: 1px solid var(--line);
+    padding: 11px 18px; border-radius: 16px; font-size: 16px; font-weight: 600; z-index: 40;
+    box-shadow: 0 14px 40px rgba(0,0,0,.5); transition: opacity .25s ease, transform .25s ease; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast .swatch { width: 20px; height: 20px; }
+
+  /* ---------- PANTALLAS ---------- */
+  .screen { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; transition: opacity .35s ease; }
+  .screen.hidden { opacity: 0; pointer-events: none; }
+  #startScreen {
+    background:
+      radial-gradient(60vmax 60vmax at 15% 20%, rgba(111,240,200,.18), transparent 60%),
+      radial-gradient(50vmax 50vmax at 85% 80%, rgba(200,155,255,.20), transparent 60%),
+      #0c1020;
+  }
+  .start-card { max-width: 580px; }
+  .start-card h1 { font-size: clamp(40px, 8vw, 76px); font-weight: 800; line-height: .95; letter-spacing: -0.03em; margin-bottom: 18px; }
+  .start-card h1 span { display: block; -webkit-text-stroke: 2px var(--text); color: transparent; }
+  .start-card p { font-size: 17px; line-height: 1.5; color: #d3d7e4; margin-bottom: 26px; max-width: 48ch; }
+  .start-btn { font-size: 18px; font-weight: 800; padding: 16px 28px; border-radius: 18px; border: none; background: var(--draw); color: #08261d; cursor: pointer; box-shadow: 0 10px 30px rgba(111,240,200,.35); }
+  .start-btn:disabled { opacity: .6; cursor: wait; }
+  .error { margin-top: 20px; padding: 14px 16px; border-radius: 14px; background: rgba(255,72,103,.15); border: 1px solid rgba(255,72,103,.5); color: #ffd0d8; font-size: 15px; line-height: 1.45; display: none; }
+  .error.show { display: block; }
+
+  #calibScreen { background: rgba(5,8,18,.35); pointer-events: none; }
+  .calib-box { text-align: center; }
+  .calib-ring { width: 170px; height: 170px; margin: 0 auto 18px; position: relative; }
+  .calib-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .calib-ring circle { fill: none; stroke-width: 10; }
+  .calib-ring .track { stroke: rgba(255,255,255,.18); }
+  .calib-ring .bar { stroke: var(--draw); stroke-linecap: round; }
+  .calib-ring .hand { position: absolute; inset: 0; display: grid; place-items: center; font-size: 64px; }
+  .calib-title { font-size: 26px; font-weight: 800; margin-bottom: 6px; text-shadow: 0 2px 12px rgba(0,0,0,.6); }
+  .calib-sub { font-size: 16px; color: #e3e6ef; text-shadow: 0 2px 10px rgba(0,0,0,.7); }
+
+  /* ---------- CUENTA REGRESIVA DE FOTO ---------- */
+  .countdown {
+    position: fixed; inset: 0; z-index: 35;
+    display: grid; place-items: center; pointer-events: none;
+    background: radial-gradient(circle at center, rgba(0,0,0,.05) 30%, rgba(0,0,0,.45) 100%);
+    transition: opacity .25s ease;
+  }
+  .countdown.hidden { opacity: 0; }
+  .countdown.hidden * { pointer-events: none !important; }
+  .cd-box { text-align: center; }
+  .cd-num {
+    font-size: clamp(120px, 28vw, 260px); font-weight: 800; line-height: 1;
+    color: #fff; -webkit-text-stroke: 3px rgba(0,0,0,.35);
+    text-shadow: 0 8px 40px rgba(0,0,0,.55);
+  }
+  .cd-num.pop { animation: pop 1s ease-out both; }
+  @keyframes pop {
+    0%   { transform: scale(1.5); opacity: 0; }
+    20%  { transform: scale(1);   opacity: 1; }
+    80%  { transform: scale(.94); opacity: 1; }
+    100% { transform: scale(.85); opacity: .2; }
+  }
+  .cd-text { font-size: 22px; font-weight: 700; margin-top: 6px; text-shadow: 0 2px 12px rgba(0,0,0,.7); }
+  .cd-cancel { margin-top: 18px; pointer-events: auto; }
+  .flash { position: fixed; inset: 0; background: #fff; z-index: 36; opacity: 0; pointer-events: none; }
+  .flash.go { animation: flash .6s ease-out; }
+  @keyframes flash { 0% { opacity: .95; } 100% { opacity: 0; } }
+
+  @media (max-width: 900px) {
+    .hud .divider { display: none; }
+    .mode { min-width: 0; }
+    .toast { top: 190px; }
+    .legend, .settings, .pencil-panel { width: calc(100% - 32px); left: 16px; right: 16px; }
+    .settings { top: auto; bottom: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="drawCanvas"></canvas>
+  <canvas id="overlayCanvas"></canvas>
+</div>
+
+<!-- ======================= HUD ======================= -->
+<header class="hud hidden" id="hud">
+  <div class="hud-item" title="Color actual">
+    <div class="swatch" id="swatch"></div>
+    <div class="hud-text"><span class="hud-label">Color</span><span class="hud-value" id="colorName">Rojo</span></div>
+  </div>
+  <div class="divider"></div>
+  <div class="hud-item" title="Grosor actual">
+    <div class="size-box"><div class="size-dot" id="sizeDot"></div></div>
+    <div class="hud-text"><span class="hud-label">Grosor</span><span class="hud-value" id="sizeText">8 px</span></div>
+  </div>
+  <div class="divider"></div>
+  <div class="hud-item" title="Tipo de pincel">
+    <div class="brush-icon" id="brushIcon">🖊️</div>
+    <div class="hud-text"><span class="hud-label">Pincel</span><span class="hud-value" id="brushName">Normal</span></div>
+  </div>
+  <div class="divider"></div>
+  <div class="mode" aria-live="polite">
+    <span class="mode-icon" id="modeIcon">👀</span>
+    <div class="hud-text"><span class="hud-label">Modo</span><span class="hud-value" id="modeText">Esperando mano</span></div>
+  </div>
+  <div class="btn-group">
+    <button class="btn" id="pencilBtn" title="Alternar entre dedo y lápiz (P)">✏️ Lápiz</button>
+    <button class="btn btn-sq" id="undoBtn" title="Deshacer (Z)" aria-label="Deshacer" disabled>↶</button>
+    <button class="btn btn-sq" id="redoBtn" title="Rehacer (Y)" aria-label="Rehacer" disabled>↷</button>
+    <button class="btn btn-danger" id="clearBtn" title="Borrar todo (C)">Borrar todo</button>
+    <button class="btn" id="saveBtn" title="Tomar foto con cuenta de 5 s (S)">📸 Foto</button>
+    <button class="btn btn-sq" id="settingsBtn" title="Ajustes de precisión" aria-label="Ajustes">⚙️</button>
+    <button class="btn btn-sq" id="helpBtn" title="Gestos (H)" aria-label="Gestos">?</button>
+  </div>
+</header>
+
+<div class="gauge" id="gauge" aria-hidden="true">
+  <div class="gauge-value" id="gaugeValue">8px</div>
+  <div class="gauge-track"><div class="gauge-fill" id="gaugeFill"></div></div>
+  <div class="gauge-hint">Sube la mano para engrosar</div>
+</div>
+
+<!-- ======================= LEYENDA ======================= -->
+<aside class="panel legend hidden" id="legend">
+  <h2>Gestos</h2>
+  <ul>
+    <li><span class="g">☝️</span><span><b>Solo índice</b><small>Dibujar</small></span></li>
+    <li><span class="g">✊</span><span><b>Puño o mano abierta</b><small>Pausa: mueve sin pintar</small></span></li>
+    <li><span class="g">✌️</span><span><b>Índice + medio</b><small>Mantén para cambiar color</small></span></li>
+    <li><span class="g">🤟</span><span><b>Índice + medio + anular</b><small>Grosor: sube o baja la mano (2–100 px)</small></span></li>
+    <li><span class="g">👆</span><span><b>Pulgar + índice en "L"</b><small>Borrador</small></span></li>
+    <li><span class="g">🤘</span><span><b>Índice + meñique</b><small>Mantén para cambiar pincel</small></span></li>
+    <li><span class="g">👌</span><span><b>Gesto OK (pinza)</b><small>Agarra y mueve todo el dibujo</small></span></li>
+    <li><span class="g">👍</span><span><b>Pulgar arriba</b><small>Mantén para tomar foto (cuenta de 5 s)</small></span></li>
+    <li><span class="g">🙌</span><span><b>Dos manos abiertas juntas</b><small>Mantén 1 s para borrar todo</small></span></li>
+  </ul>
+  <div class="keys">
+    Puedes usar las dos manos: una dibuja y la otra cambia color o pincel. Deshacer y rehacer están en los botones ↶ ↷ del panel superior.<br>
+    <kbd>Z</kbd> deshacer <kbd>Y</kbd> rehacer <kbd>C</kbd> borrar <kbd>S</kbd> foto<br>
+    <kbd>K</kbd> color <kbd>B</kbd> pincel <kbd>P</kbd> lápiz <kbd>Espacio</kbd> levantar lápiz
+  </div>
+</aside>
+
+<!-- ======================= AJUSTES ======================= -->
+<aside class="panel settings hidden" id="settings">
+  <h2>Ajustes de precisión</h2>
+  <div class="row">
+    <div class="row-head"><span>Suavizado del trazo</span><output id="smoothOut">5</output></div>
+    <input type="range" id="smooth" min="1" max="10" value="5">
+    <small>Alto: líneas más limpias. Bajo: respuesta más inmediata.</small>
+  </div>
+  <div class="row">
+    <div class="row-head"><span>Estabilidad de gestos</span><output id="stabOut">5</output></div>
+    <input type="range" id="stab" min="3" max="9" value="5">
+    <small>Frames que se votan para confirmar un gesto. Sube si cambia de modo sin querer.</small>
+  </div>
+  <div class="row">
+    <div class="row-head"><span>Tiempo de mantener</span><output id="holdOut">1.0×</output></div>
+    <input type="range" id="hold" min="5" max="20" value="10">
+    <small>Escala el tiempo de los gestos sostenidos (color, pincel y foto).</small>
+  </div>
+  <div class="row">
+    <div class="row-head"><span>Tolerancia de color del lápiz</span><output id="tolOut">16°</output></div>
+    <input type="range" id="tol" min="5" max="40" value="16">
+    <small>Más alta detecta mejor con poca luz, pero puede confundir otros objetos.</small>
+  </div>
+  <label class="check"><input type="checkbox" id="skeleton"> Mostrar esqueleto de la mano</label>
+  <div class="perf" id="perf">Rendimiento: midiendo…</div>
+</aside>
+
+<!-- ======================= PANEL LÁPIZ ======================= -->
+<aside class="panel pencil-panel hidden" id="pencilPanel">
+  <h2 id="ppTitle">Calibrar lápiz</h2>
+  <div class="mask-wrap" id="maskWrap"><canvas id="maskPreview"></canvas><span>Vista de detección</span></div>
+  <div class="pp-text" id="ppText"></div>
+  <div class="pp-warn" id="ppWarn"></div>
+  <div class="pp-actions">
+    <button class="btn btn-primary" id="captureBtn">Capturar color</button>
+    <button class="btn" id="liftBtn">Levantar lápiz</button>
+    <button class="btn" id="recalBtn">Recalibrar</button>
+    <span class="target-chip" id="targetChip"></span>
+  </div>
+</aside>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- Cuenta regresiva para la foto -->
+<div class="countdown hidden" id="countdown" aria-live="assertive">
+  <div class="cd-box">
+    <div class="cd-num" id="cdNum">5</div>
+    <div class="cd-text">Prepara tu pose 📸</div>
+    <button class="btn cd-cancel" id="cdCancel">Cancelar foto</button>
+  </div>
+</div>
+<div class="flash" id="flash"></div>
+
+<section class="screen" id="startScreen">
+  <div class="start-card">
+    <h1>Pinta en <span>el aire</span></h1>
+    <p>Dibuja con tu dedo índice o con un lápiz de punta de color. Cada combinación de dedos es una herramienta distinta. Todo se procesa en tu navegador; el video no sale de tu equipo.</p>
+    <button class="start-btn" id="startBtn">Activar cámara</button>
+    <div class="error" id="errorBox"></div>
+  </div>
+</section>
+
+<section class="screen hidden" id="calibScreen">
+  <div class="calib-box">
+    <div class="calib-ring">
+      <svg viewBox="0 0 120 120">
+        <circle class="track" cx="60" cy="60" r="54"></circle>
+        <circle class="bar" id="calibBar" cx="60" cy="60" r="54" stroke-dasharray="339.292" stroke-dashoffset="339.292"></circle>
+      </svg>
+      <div class="hand">🖐️</div>
+    </div>
+    <div class="calib-title" id="calibTitle">Cargando modelo de IA…</div>
+    <div class="calib-sub" id="calibSub">Esto toma unos segundos la primera vez</div>
+  </div>
+</section>
+
+<script>
+/* =========================================================================
+   PINTURA EN EL AIRE v2
+   -------------------------------------------------------------------------
+   MEJORAS DE PRECISIÓN RESPECTO A v1
+   1. MediaPipe Tasks "HandLandmarker" (más nuevo que @mediapipe/hands),
+      con aceleración GPU y modo VIDEO: más FPS y menos latencia.
+   2. Dedos evaluados con ÁNGULOS 3D de articulación (coordenadas del mundo
+      en metros), no con distancias 2D. No importa si la mano está
+      inclinada, girada o de canto.
+   3. HISTÉRESIS: umbral distinto para "entrar" y "salir" de extendido,
+      así un dedo en el límite no parpadea entre estados.
+   4. VOTACIÓN de gestos en ventana deslizante (mayoría de N frames) en
+      vez de exigir N frames idénticos: tolera lecturas sueltas erróneas
+      sin volverse lenta.
+   5. Filtro One Euro ajustable desde el panel de ajustes.
+   6. Cámara a 60 fps si el dispositivo lo permite.
+
+   MODO LÁPIZ (rastreo por color)
+   MediaPipe no reconoce lápices, así que rastreamos el COLOR de la punta:
+   - El usuario calibra poniendo la punta en un círculo; se mide su tono (HSV).
+   - Cada frame se reduce el video a 320 px de ancho, se crea una máscara
+     de píxeles con ese color y se agrupan en manchas (componentes conexos).
+   - Se elige la mancha más probable (tamaño, cercanía a la posición
+     anterior y a una mano detectada).
+   - Si hay una mano sosteniéndolo, la punta es el extremo de la mancha
+     MÁS LEJANO a la palma (la punta sobresale de los dedos).
+   ========================================================================= */
+(() => {
+  'use strict';
+
+  // ============================== CONFIG ==============================
+  const TV_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+  const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+  const CONFIG = {
+    CALIBRATION_MS: 2000,
+    CLEAR_HOLD_MS: 1000,
+    CLEAR_COOLDOWN_MS: 2000,
+    MIN_SIZE: 2, MAX_SIZE: 100,
+    MIN_MOVE_PX: 1.2,
+    MAX_JUMP_RATIO: 0.22,
+    MAX_HISTORY: 20,
+    // Ángulo medio de las articulaciones de un dedo (180° = recto)
+    FINGER_ENTER: 155, FINGER_EXIT: 138,
+    THUMB_ANGLE_ENTER: 150, THUMB_ANGLE_EXIT: 135,
+    // Separación del pulgar respecto al nudillo del índice / tamaño de palma
+    THUMB_ABD_ENTER: 0.60, THUMB_ABD_EXIT: 0.48,
+    // Pinza 👌: distancia pulgar–índice / tamaño de palma
+    PINCH_ENTER: 0.32, PINCH_EXIT: 0.48,
+    L_ANGLE: 40,
+    PROC_W: 320,          // ancho de procesamiento del modo lápiz
+  };
+
+  const settings = { smoothing: 5, stability: 5, holdScale: 1, colorTol: 16, showSkeleton: false };
+
+  const COLORS = [
+    { name: 'Rojo', hex: '#ff3b3b' }, { name: 'Verde', hex: '#22e06b' },
+    { name: 'Azul', hex: '#2f7bff' }, { name: 'Amarillo', hex: '#ffd60a' },
+    { name: 'Blanco', hex: '#ffffff' }, { name: 'Magenta', hex: '#ff2bd6' },
+  ];
+  const BRUSHES = [
+    { id: 'normal',  name: 'Normal',     icon: '🖊️' },
+    { id: 'neon',    name: 'Neón',       icon: '💡' },
+    { id: 'spray',   name: 'Aerosol',    icon: '🌫️' },
+    { id: 'rainbow', name: 'Arcoíris',   icon: '🌈' },
+    { id: 'callig',  name: 'Caligrafía', icon: '✒️' },
+  ];
+
+  const MODE_UI = {
+    DRAW:   ['Dibujando', '✍️', 'var(--draw)'],
+    ERASE:  ['Borrando', '🧽', 'var(--erase)'],
+    COLOR:  ['Cambiando color', '🎨', 'var(--color)'],
+    SIZE:   ['Ajustando grosor', '📏', 'var(--size)'],
+    BRUSH:  ['Cambiando pincel', '🖌️', 'var(--color)'],
+    SAVE:   ['Confirmando foto', '📸', '#ffffff'],
+    COUNTDOWN: ['¡Posa para la foto!', '📸', '#ffffff'],
+    GRAB:   ['Moviendo dibujo', '✋', 'var(--size)'],
+    PAUSE:  ['Pausa / Navegación', '✋', 'var(--pause)'],
+    CLEAR:  ['Borrar todo…', '🙌', 'var(--danger)'],
+    NOHAND: ['Muestra tu mano', '👀', 'var(--pause)'],
+    CALIB:  ['Calibrando', '🖐️', 'var(--draw)'],
+    PENCIL: ['Lápiz dibujando', '✏️', 'var(--draw)'],
+    PENCIL_UP: ['Lápiz levantado', '⏸️', 'var(--pause)'],
+    PENCIL_LOST: ['Buscando lápiz', '🔍', 'var(--erase)'],
+    PENCIL_CALIB: ['Calibrar lápiz', '🎯', 'var(--size)'],
+  };
+
+  // Gestos que se activan manteniéndolos (con anillo de progreso)
+  const HOLDS = {
+    COLOR: { ms: 1500, icon: '🎨', ring: () => COLORS[(state.colorIdx + 1) % COLORS.length].hex, action: () => cycleColor() },
+    BRUSH: { ms: 1000, icon: '🖌️', ring: () => '#c89bff', action: () => cycleBrush() },
+    // 👍 confirma la foto y arranca la cuenta regresiva de 5 s
+    SAVE:  { ms: 1500, icon: '📸', ring: () => '#ffffff', action: () => startPhotoCountdown() },
+  };
+  const PHOTO_SECONDS = 5;
+  const PHOTO_COOLDOWN_MS = 2500;   // evita otra foto si el pulgar sigue arriba
+  const POINTER_GESTURES = new Set(['DRAW', 'ERASE', 'GRAB', 'SIZE']);
+
+  const HAND_CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+    [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  const FINGERS = { index: [5,6,7,8], middle: [9,10,11,12], ring: [13,14,15,16], pinky: [17,18,19,20] };
+
+  // ============================== DOM ==============================
+  const $ = (id) => document.getElementById(id);
+  const video = $('video');
+  const drawCanvas = $('drawCanvas'), overlay = $('overlayCanvas');
+  const dctx = drawCanvas.getContext('2d');
+  const octx = overlay.getContext('2d');
+  let W = 1280, H = 720;
+  let landmarker = null, delegateUsed = '';
+
+  // ============================== ESTADO ==============================
+  const state = {
+    phase: 'idle', colorIdx: 0, brushIdx: 0, size: 8,
+    calibProgress: 0, lastT: performance.now(),
+    stroke: { last: null, lastMid: null, dist: 0, hue: 0 },
+    primaryKey: null, primaryGesture: null,
+    grab: null,
+    clearHoldStart: null, clearCooldownUntil: 0,
+    modeKey: null,
+  };
+  const handStates = new Map();
+  const history = [], redoStack = [];
+
+  // ============================== MATEMÁTICA ==============================
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+  const midP = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+  /** Ángulo 3D en el vértice b del triángulo a-b-c (180° = alineados). */
+  function ang3(a, b, c) {
+    const ux = a.x - b.x, uy = a.y - b.y, uz = a.z - b.z;
+    const vx = c.x - b.x, vy = c.y - b.y, vz = c.z - b.z;
+    const d = Math.hypot(ux, uy, uz) * Math.hypot(vx, vy, vz) || 1;
+    return Math.acos(clamp((ux * vx + uy * vy + uz * vz) / d, -1, 1)) * 57.29578;
+  }
+  /** Ángulo 2D entre vectores a1→a2 y b1→b2 (producto punto). */
+  function angle2(a1, a2, b1, b2) {
+    const v1x = a2.x - a1.x, v1y = a2.y - a1.y, v2x = b2.x - b1.x, v2y = b2.y - b1.y;
+    const d = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y) || 1;
+    return Math.acos(clamp((v1x * v2x + v1y * v2y) / d, -1, 1)) * 57.29578;
+  }
+  /** Punto en curva cuadrática de Bézier: (1-t)²A + 2(1-t)t·C + t²B */
+  function quadPoint(a, c, b, t) {
+    const u = 1 - t;
+    return { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y };
+  }
+
+  /** Filtro One Euro: suaviza fuerte en movimientos lentos y poco en rápidos. */
+  class OneEuroFilter {
+    constructor() { this.minCutoff = 1; this.beta = 0.015; this.dCutoff = 1; this.reset(); }
+    reset() { this.xPrev = null; this.dxPrev = 0; this.tPrev = 0; }
+    alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+    filter(x, tMs) {
+      if (this.xPrev === null) { this.xPrev = x; this.tPrev = tMs; return x; }
+      const dt = Math.max((tMs - this.tPrev) / 1000, 1e-3);
+      this.tPrev = tMs;
+      const dx = (x - this.xPrev) / dt;
+      const aD = this.alpha(this.dCutoff, dt);
+      const dxHat = aD * dx + (1 - aD) * this.dxPrev;
+      const a = this.alpha(this.minCutoff + this.beta * Math.abs(dxHat), dt);
+      const xHat = a * x + (1 - a) * this.xPrev;
+      this.xPrev = xHat; this.dxPrev = dxHat;
+      return xHat;
+    }
+  }
+  const fx = new OneEuroFilter(), fy = new OneEuroFilter();
+  const pencilFx = new OneEuroFilter(), pencilFy = new OneEuroFilter();
+  const ALL_FILTERS = [fx, fy, pencilFx, pencilFy];
+
+  /** Suavizado 1..10 -> parámetros del filtro (curva exponencial). */
+  function applySmoothing() {
+    const t = (settings.smoothing - 1) / 9;
+    const minCutoff = 3.0 * Math.pow(0.12, t);   // 3.0 Hz (ágil) -> 0.36 Hz (muy suave)
+    const beta = 0.03 - 0.022 * t;
+    for (const f of ALL_FILTERS) { f.minCutoff = minCutoff; f.beta = beta; }
+  }
+
+  // ======================= ANÁLISIS DE LA MANO =======================
+  function getHandState(key, now) {
+    let hs = handStates.get(key);
+    if (!hs) {
+      hs = { ext: { thumb: false, index: false, middle: false, ring: false, pinky: false },
+             pinch: false, votes: [], stable: null, hold: { g: null, start: 0 }, seen: now };
+      handStates.set(key, hs);
+    }
+    hs.seen = now;
+    return hs;
+  }
+
+  /**
+   * Clasifica el gesto de una mano.
+   *
+   * DEDO EXTENDIDO (3D): promedio de los ángulos en sus 3 articulaciones
+   *   (muñeca–MCP–PIP, MCP–PIP–DIP, PIP–DIP–punta). Recto ≈ 165–180°,
+   *   doblado en puño ≈ 90–120°. Con histéresis:
+   *     si estaba doblado, pasa a extendido cuando supera 155°
+   *     si estaba extendido, vuelve a doblado cuando baja de 138°
+   *
+   * PULGAR: rectitud (ángulos en MCP e IP) + separación de su punta
+   *   respecto al nudillo del índice, normalizada por el tamaño de la palma.
+   *
+   * PINZA 👌: distancia 3D pulgar–índice / palma < 0.32 (sale con > 0.48).
+   */
+  function analyzeHand(lm, wl, key, now) {
+    const pts = lm.map((l) => ({ x: l.x * W, y: l.y * H }));
+    const w3 = (wl && wl.length === 21) ? wl : lm.map((l) => ({ x: l.x, y: l.y * H / W, z: l.z }));
+    const hs = getHandState(key, now);
+    const palm3 = dist3(w3[0], w3[9]) || 1e-6;
+
+    for (const [name, [m, p, d, t]] of Object.entries(FINGERS)) {
+      const straight = (ang3(w3[0], w3[m], w3[p]) + ang3(w3[m], w3[p], w3[d]) + ang3(w3[p], w3[d], w3[t])) / 3;
+      hs.ext[name] = hs.ext[name] ? straight > CONFIG.FINGER_EXIT : straight > CONFIG.FINGER_ENTER;
+    }
+
+    const tStraight = (ang3(w3[1], w3[2], w3[3]) + ang3(w3[2], w3[3], w3[4])) / 2;
+    const abd = dist3(w3[4], w3[5]) / palm3;
+    hs.ext.thumb = hs.ext.thumb
+      ? (tStraight > CONFIG.THUMB_ANGLE_EXIT && abd > CONFIG.THUMB_ABD_EXIT)
+      : (tStraight > CONFIG.THUMB_ANGLE_ENTER && abd > CONFIG.THUMB_ABD_ENTER);
+
+    const pinchD = dist3(w3[4], w3[8]) / palm3;
+    hs.pinch = hs.pinch ? pinchD < CONFIG.PINCH_EXIT : pinchD < CONFIG.PINCH_ENTER;
+
+    const { thumb, index: I, middle: M, ring: R, pinky: P } = hs.ext;
+
+    // Pulgar arriba: dirección 2->4 casi vertical hacia arriba en la imagen
+    const tdx = pts[4].x - pts[2].x, tdy = pts[4].y - pts[2].y;
+    const thumbUp = tStraight > 140 && abd > 0.5 && tdy < 0 && Math.abs(tdy) > Math.abs(tdx) * 1.2;
+    const lAngle = angle2(pts[2], pts[4], pts[5], pts[8]);
+
+    let raw = 'UNKNOWN';
+    if (hs.pinch && M && R && P)            raw = 'GRAB';    // 👌
+    else if (I && M && R && P)              raw = 'OPEN';    // 🖐️
+    else if (!I && !M && !R && !P)          raw = thumbUp ? 'SAVE' : 'FIST'; // 👍 / ✊
+    else if (I && M && R && !P)             raw = 'SIZE';    // 3 dedos
+    else if (I && M && !R && !P)            raw = 'COLOR';   // ✌️
+    else if (I && !M && !R && P)            raw = 'BRUSH';   // 🤘
+    else if (I && !M && !R && !P)           raw = (thumb && lAngle > CONFIG.L_ANGLE) ? 'ERASE' : 'DRAW';
+
+    // VOTACIÓN: el gesto estable es el que gana la mayoría en los últimos N frames
+    hs.votes.push(raw);
+    while (hs.votes.length > settings.stability) hs.votes.shift();
+    const counts = {};
+    let best = null, bestCount = 0;
+    for (const v of hs.votes) { counts[v] = (counts[v] || 0) + 1; if (counts[v] > bestCount) { bestCount = counts[v]; best = v; } }
+    if (bestCount >= Math.max(2, Math.ceil(settings.stability * 0.6))) hs.stable = best;
+
+    const palmIds = [0, 5, 9, 13, 17];
+    const palm = { x: palmIds.reduce((s, i) => s + pts[i].x, 0) / 5, y: palmIds.reduce((s, i) => s + pts[i].y, 0) / 5 };
+
+    return { key, pts, raw, gesture: hs.stable, hs, palm, handSize: dist(pts[0], pts[9]) || 1,
+             fullOpen: raw === 'OPEN' && thumb };
+  }
+
+  function gestureToMode(g) {
+    if (!g) return 'PAUSE';
+    if (POINTER_GESTURES.has(g) || HOLDS[g]) return g;
+    return 'PAUSE';
+  }
+
+  // ============================== HISTORIAL ==============================
+  function snapshot() {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    c.getContext('2d').drawImage(drawCanvas, 0, 0);
+    return c;
+  }
+  function restore(c) { dctx.clearRect(0, 0, W, H); dctx.drawImage(c, 0, 0); }
+  function pushHistory() {
+    history.push(snapshot());
+    if (history.length > CONFIG.MAX_HISTORY) history.shift();
+    redoStack.length = 0;
+    updateUndoUI();
+  }
+  function undo() {
+    endStroke(); endGrab();
+    if (!history.length) { toast('No hay nada que deshacer'); return; }
+    redoStack.push(snapshot());
+    restore(history.pop());
+    updateUndoUI();
+    toast('Deshecho ↩️');
+  }
+  function redo() {
+    endStroke(); endGrab();
+    if (!redoStack.length) { toast('No hay nada que rehacer'); return; }
+    history.push(snapshot());
+    restore(redoStack.pop());
+    updateUndoUI();
+    toast('Rehecho ↪️');
+  }
+
+  // ============================== PINCELES ==============================
+  /**
+   * TRAZO FLUIDO: puntos medios + curvas cuadráticas.
+   *   Puntos:  P0 -- P1 -- P2 -- P3     Medios: M1  M2  M3
+   *   Segmento i: moveTo(M_i) -> quadraticCurveTo(P_i, M_i+1)
+   * Las curvas se unen con la misma tangente: sin esquinas.
+   * Los pinceles especiales muestrean esa misma curva.
+   */
+  function strokeColor() {
+    if (BRUSHES[state.brushIdx].id === 'rainbow') {
+      return `hsl(${(state.stroke.hue + state.stroke.dist * 0.45) % 360}, 100%, 58%)`;
+    }
+    return COLORS[state.colorIdx].hex;
+  }
+  const eraserSize = () => Math.max(40, state.size * 1.5);
+
+  function quadPath(a, c, b) { dctx.beginPath(); dctx.moveTo(a.x, a.y); dctx.quadraticCurveTo(c.x, c.y, b.x, b.y); }
+  function setLine(w, color) { dctx.lineWidth = w; dctx.lineCap = 'round'; dctx.lineJoin = 'round'; dctx.strokeStyle = color; }
+
+  function spray(p, color, size) {
+    const r = size / 2, dots = Math.round(clamp(size * 0.5, 6, 40)), dotSize = Math.max(1.3, size / 40);
+    dctx.fillStyle = color;
+    for (let k = 0; k < dots; k++) {
+      const ang = Math.random() * Math.PI * 2, rr = r * Math.sqrt(Math.random());
+      dctx.globalAlpha = 0.45 + Math.random() * 0.55;
+      dctx.fillRect(p.x + Math.cos(ang) * rr, p.y + Math.sin(ang) * rr, dotSize, dotSize);
+    }
+    dctx.globalAlpha = 1;
+  }
+
+  /** Plumilla de caligrafía a 45°: el ancho depende de la dirección del trazo. */
+  function nibQuad(p0, p1, color, size) {
+    const nx = Math.cos(Math.PI / 4) * size / 2, ny = -Math.sin(Math.PI / 4) * size / 2;
+    dctx.fillStyle = color;
+    dctx.beginPath();
+    dctx.moveTo(p0.x + nx, p0.y + ny); dctx.lineTo(p0.x - nx, p0.y - ny);
+    dctx.lineTo(p1.x - nx, p1.y - ny); dctx.lineTo(p1.x + nx, p1.y + ny);
+    dctx.closePath(); dctx.fill();
+  }
+
+  function paintDot(p, erase) {
+    dctx.save();
+    const id = BRUSHES[state.brushIdx].id, col = strokeColor();
+    if (erase) {
+      dctx.globalCompositeOperation = 'destination-out';
+      dctx.beginPath(); dctx.arc(p.x, p.y, eraserSize() / 2, 0, Math.PI * 2); dctx.fill();
+    } else if (id === 'spray') spray(p, col, state.size);
+    else if (id === 'callig') nibQuad({ x: p.x - 0.5, y: p.y }, { x: p.x + 0.5, y: p.y }, col, state.size);
+    else {
+      if (id === 'neon') { dctx.shadowBlur = Math.max(8, state.size * 1.2); dctx.shadowColor = col; }
+      dctx.fillStyle = col;
+      dctx.beginPath(); dctx.arc(p.x, p.y, state.size / 2, 0, Math.PI * 2); dctx.fill();
+    }
+    dctx.restore();
+  }
+
+  function paintSegment(a, c, b, erase) {
+    dctx.save();
+    const size = state.size, col = strokeColor();
+    if (erase) {
+      dctx.globalCompositeOperation = 'destination-out';
+      setLine(eraserSize(), '#000'); quadPath(a, c, b); dctx.stroke();
+      dctx.restore(); return;
+    }
+    switch (BRUSHES[state.brushIdx].id) {
+      case 'neon':
+        setLine(size, col); dctx.shadowBlur = Math.max(8, size * 1.2); dctx.shadowColor = col;
+        quadPath(a, c, b); dctx.stroke();
+        dctx.shadowBlur = 0; setLine(Math.max(1, size * 0.35), 'rgba(255,255,255,.9)');
+        quadPath(a, c, b); dctx.stroke();
+        break;
+      case 'spray': {
+        const len = dist(a, c) + dist(c, b), n = Math.max(1, Math.ceil(len / Math.max(2, size * 0.2)));
+        for (let i = 1; i <= n; i++) spray(quadPoint(a, c, b, i / n), col, size);
+        break;
+      }
+      case 'callig': {
+        const len = dist(a, c) + dist(c, b), n = Math.max(1, Math.ceil(len / 2));
+        let prev = a;
+        for (let i = 1; i <= n; i++) { const q = quadPoint(a, c, b, i / n); nibQuad(prev, q, col, size); prev = q; }
+        break;
+      }
+      default:
+        setLine(size, col); quadPath(a, c, b); dctx.stroke();
+    }
+    dctx.restore();
+  }
+
+  /** Agrega un punto al trazo actual (dedo o lápiz). */
+  function strokePoint(p, erase) {
+    const s = state.stroke;
+    if (s.last) {
+      const d = dist(s.last, p);
+      if (d < CONFIG.MIN_MOVE_PX) return;                 // ruido
+      if (d > W * CONFIG.MAX_JUMP_RATIO) endStroke();      // salto anómalo de tracking
+    }
+    if (!s.last) {
+      pushHistory();                                       // cada trazo es un paso deshacible
+      s.last = p; s.lastMid = p; s.dist = 0; s.hue = Math.random() * 360;
+      paintDot(p, erase);
+      return;
+    }
+    const mid = midP(s.last, p);
+    s.dist += dist(s.last, p);
+    paintSegment(s.lastMid, s.last, mid, erase);
+    s.last = p; s.lastMid = mid;
+  }
+  function endStroke() { state.stroke.last = null; state.stroke.lastMid = null; }
+
+  // ============================== ACCIONES ==============================
+  function cycleColor() {
+    state.colorIdx = (state.colorIdx + 1) % COLORS.length;
+    updateColorUI();
+    const c = COLORS[state.colorIdx];
+    toast(`Color: ${c.name}`, c.hex);
+  }
+  function cycleBrush() {
+    state.brushIdx = (state.brushIdx + 1) % BRUSHES.length;
+    updateBrushUI();
+    const b = BRUSHES[state.brushIdx];
+    toast(`Pincel: ${b.name} ${b.icon}`);
+  }
+
+  /** Grosor por altura: t = (0.85 − y)/0.70 ; grosor = 2 + t^1.5 · 98 (más fino = más precisión). */
+  function adjustSize(y) {
+    const t = clamp((0.85 - y / H) / 0.70, 0, 1);
+    const target = CONFIG.MIN_SIZE + Math.pow(t, 1.5) * (CONFIG.MAX_SIZE - CONFIG.MIN_SIZE);
+    state.size += (target - state.size) * 0.25;
+    updateSizeUI();
+  }
+
+  /** 👌 Agarrar: copia el lienzo al empezar y lo redibuja desplazado. */
+  function startGrab(p) { pushHistory(); state.grab = { snap: snapshot(), origin: p }; }
+  function moveGrab(p) {
+    const g = state.grab; if (!g) return;
+    dctx.clearRect(0, 0, W, H);
+    dctx.drawImage(g.snap, p.x - g.origin.x, p.y - g.origin.y);
+  }
+  function endGrab() { state.grab = null; }
+
+  function clearAll() {
+    endStroke(); endGrab();
+    pushHistory();
+    dctx.clearRect(0, 0, W, H);
+    toast('Lienzo limpio 🧹 (puedes deshacer)');
+  }
+
+  /** Gestos sostenidos con anillo de progreso. Devuelve el gesto si está activo. */
+  function handleHold(h, now) {
+    const def = HOLDS[h.gesture], hold = h.hs.hold;
+    if (!def) { hold.g = null; return null; }
+    if (h.gesture === 'SAVE' && (photo.active || now < photo.cooldownUntil)) { hold.g = null; return null; }
+    if (hold.g !== h.gesture) { hold.g = h.gesture; hold.start = now; }
+    const prog = clamp((now - hold.start) / (def.ms * settings.holdScale), 0, 1);
+    const anchor = { x: h.palm.x, y: h.palm.y - h.handSize * 0.9 };
+    drawRing(anchor, 30, 1, 'rgba(255,255,255,.22)', 7);
+    drawRing(anchor, 30, prog, def.ring(), 7);
+    drawLabel(anchor, def.icon, 24);
+    if (prog >= 1) { def.action(); hold.start = now + (def.cooldown || 0); }
+    return h.gesture;
+  }
+
+  /** 🙌 Dos manos abiertas, palmas cerca (< 2.8 tamaños de mano), 1 s. */
+  function checkClear(a, b, now) {
+    if (a.gesture !== 'OPEN' || b.gesture !== 'OPEN') { state.clearHoldStart = null; return false; }
+    if (dist(a.palm, b.palm) > (a.handSize + b.handSize) / 2 * 2.8) { state.clearHoldStart = null; return false; }
+    endStroke(); setModeUI('CLEAR'); showGauge(false);
+    if (now < state.clearCooldownUntil) return true;
+    if (!state.clearHoldStart) state.clearHoldStart = now;
+    const prog = clamp((now - state.clearHoldStart) / CONFIG.CLEAR_HOLD_MS, 0, 1);
+    const m = midP(a.palm, b.palm);
+    drawRing(m, 60, 1, 'rgba(255,255,255,.25)', 10);
+    drawRing(m, 60, prog, '#ff4867', 10);
+    drawLabel(m, '🧹', 34);
+    if (prog >= 1) { clearAll(); state.clearHoldStart = null; state.clearCooldownUntil = now + CONFIG.CLEAR_COOLDOWN_MS; }
+    return true;
+  }
+
+  // ============================== DIBUJO OVERLAY ==============================
+  function drawRing(p, r, progress, color, width = 5) {
+    if (progress <= 0) return;
+    octx.save();
+    octx.beginPath();
+    octx.arc(p.x, p.y, r, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+    octx.strokeStyle = color; octx.lineWidth = width; octx.lineCap = 'round'; octx.stroke();
+    octx.restore();
+  }
+  function circle(p, r, fill, stroke, lw = 2, dash = null) {
+    octx.save(); octx.beginPath(); octx.arc(p.x, p.y, Math.max(1, r), 0, Math.PI * 2);
+    if (fill) { octx.fillStyle = fill; octx.fill(); }
+    if (stroke) { if (dash) octx.setLineDash(dash); octx.strokeStyle = stroke; octx.lineWidth = lw; octx.stroke(); }
+    octx.restore();
+  }
+  /** Texto legible: el canvas está en espejo, así que volteamos localmente el texto. */
+  function drawLabel(p, text, size) {
+    octx.save();
+    octx.translate(p.x, p.y); octx.scale(-1, 1);
+    octx.font = `${size}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+    octx.textAlign = 'center'; octx.textBaseline = 'middle';
+    octx.fillText(text, 0, 1);
+    octx.restore();
+  }
+  function drawCursor(p, kind) {
+    const color = COLORS[state.colorIdx].hex;
+    switch (kind) {
+      case 'DRAW':  circle(p, Math.max(3, state.size / 2), color, 'rgba(255,255,255,.9)', 2); break;
+      case 'ERASE': circle(p, eraserSize() / 2, 'rgba(255,148,102,.18)', '#fff', 2.5, [8, 6]); break;
+      case 'SIZE':  circle(p, state.size / 2, color + '66', '#fff', 2); circle(p, 3, '#fff'); break;
+      case 'GRAB':  circle(p, 22, 'rgba(255,211,77,.2)', '#ffd34d', 3); drawLabel(p, '✋', 20); break;
+      default:      circle(p, 11, null, 'rgba(255,255,255,.95)', 2.5); circle(p, 3, '#fff');
+    }
+  }
+  function drawSkeleton(info, color) {
+    octx.save();
+    octx.strokeStyle = color; octx.lineWidth = 2; octx.globalAlpha = 0.8;
+    for (const [a, b] of HAND_CONNECTIONS) {
+      octx.beginPath(); octx.moveTo(info.pts[a].x, info.pts[a].y); octx.lineTo(info.pts[b].x, info.pts[b].y); octx.stroke();
+    }
+    octx.restore();
+    for (const pt of info.pts) circle(pt, 4, color);
+  }
+
+  // ============================== MODO DEDO ==============================
+  /**
+   * Con dos manos: la que hace un gesto de puntero (dibujar, borrar,
+   * grosor, agarrar) es la principal. Los gestos sostenidos (color,
+   * pincel, deshacer, guardar) funcionan con CUALQUIER mano, así puedes
+   * dibujar con una y cambiar color con la otra.
+   */
+  function pickPrimary(infos) {
+    const cur = infos.find((i) => i.key === state.primaryKey);
+    if (cur && POINTER_GESTURES.has(cur.gesture)) return cur;
+    return infos.find((i) => POINTER_GESTURES.has(i.gesture)) || cur || infos[0];
+  }
+
+  function fingerFrame(infos, now) {
+    if (!infos.length) {
+      endStroke(); endGrab(); fx.reset(); fy.reset();
+      state.primaryKey = null; state.primaryGesture = null;
+      setModeUI('NOHAND'); showGauge(false);
+      return;
+    }
+    if (infos.length === 2 && checkClear(infos[0], infos[1], now)) return;
+
+    const primary = pickPrimary(infos);
+    if (primary.key !== state.primaryKey) {
+      endStroke(); endGrab(); fx.reset(); fy.reset();
+      state.primaryKey = primary.key; state.primaryGesture = null;
+    }
+
+    let holdMode = null;
+    for (const h of infos) { const hm = handleHold(h, now); if (hm) holdMode = hm; }
+
+    const g = primary.gesture;
+    if (g !== state.primaryGesture) {       // al cambiar de gesto: cortar trazo y reiniciar filtro
+      endStroke(); endGrab(); fx.reset(); fy.reset();
+      state.primaryGesture = g;
+    }
+
+    const src = g === 'GRAB' ? midP(primary.pts[4], primary.pts[8]) : primary.pts[8];
+    const p = { x: fx.filter(src.x, now), y: fy.filter(src.y, now) };
+    const mode = gestureToMode(g);
+
+    switch (g) {
+      case 'DRAW':  strokePoint(p, false); break;
+      case 'ERASE': strokePoint(p, true); break;
+      case 'SIZE':  adjustSize(p.y); break;
+      case 'GRAB':  if (!state.grab) startGrab(p); moveGrab(p); break;
+    }
+    if (!HOLDS[g]) drawCursor(p, mode);
+    showGauge(g === 'SIZE');
+    setModeUI(holdMode || mode);
+  }
+
+  // ============================== MODO LÁPIZ ==============================
+  const pencil = { active: false, calibrating: false, target: null, lifted: false,
+                   seen: 0, lost: 0, lastErase: false, tipSmall: null };
+  let PW = 320, PH = 180, procCanvas, pctx, mask, labels, bfsQueue, maskImg, prevCtx;
+
+  function initProcessing() {
+    PW = CONFIG.PROC_W; PH = Math.round(PW * H / W);
+    procCanvas = document.createElement('canvas');
+    procCanvas.width = PW; procCanvas.height = PH;
+    pctx = procCanvas.getContext('2d', { willReadFrequently: true });
+    mask = new Uint8Array(PW * PH);
+    labels = new Int32Array(PW * PH);
+    bfsQueue = new Int32Array(PW * PH);
+    const prev = $('maskPreview');
+    prev.width = PW; prev.height = PH;
+    prevCtx = prev.getContext('2d');
+    maskImg = prevCtx.createImageData(PW, PH);
+  }
+
+  function rgbToHsv(r, g, b) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    const v = max / 255, s = max ? d / max : 0;
+    let h = 0;
+    if (d) {
+      if (max === r) h = ((g - b) / d) % 6; else if (max === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
+      h *= 60; if (h < 0) h += 360;
+    }
+    return { h, s, v };
+  }
+
+  /** Mide el color en el círculo central (media circular del tono). */
+  function capturePencilColor() {
+    pctx.drawImage(video, 0, 0, PW, PH);
+    const d = pctx.getImageData(0, 0, PW, PH).data;
+    const cx = Math.round(PW / 2), cy = Math.round(PH / 2), r = Math.max(3, Math.round(PW * 0.018));
+    let sinS = 0, cosS = 0, wS = 0, sS = 0, vS = 0, nC = 0, allS = 0, allV = 0, n = 0;
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let x = cx - r; x <= cx + r; x++) {
+        if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
+        const j = (y * PW + x) * 4;
+        const { h, s, v } = rgbToHsv(d[j], d[j + 1], d[j + 2]);
+        allS += s; allV += v; n++;
+        if (s > 0.25 && v > 0.15) {
+          // El tono es circular (359° ≈ 0°): se promedia como vector
+          sinS += Math.sin(h * Math.PI / 180) * s; cosS += Math.cos(h * Math.PI / 180) * s; wS += s;
+          sS += s; vS += v; nC++;
+        }
+      }
+    }
+    const chromatic = nC >= n * 0.35;
+    let h = Math.atan2(sinS, cosS) * 180 / Math.PI; if (h < 0) h += 360;
+    pencil.target = chromatic ? { chromatic, h, s: sS / nC, v: vS / nC } : { chromatic, h: 0, s: allS / n, v: allV / n };
+
+    const warn = $('ppWarn');
+    warn.classList.remove('show');
+    if (!chromatic) {
+      warn.textContent = 'La punta tiene poco color (gris, negro o blanco). La detección será inestable: usa una punta de color vivo, una tapa de marcador o cinta de color.';
+      warn.classList.add('show');
+    } else if ((h < 40 || h > 340) && pencil.target.s < 0.55) {
+      warn.textContent = 'Este color se parece al tono de piel y puede confundirse con tu mano o cara. Mejor verde, azul o fucsia intenso.';
+      warn.classList.add('show');
+    }
+    const t = pencil.target;
+    const swatch = chromatic ? `hsl(${Math.round(t.h)}, ${Math.round(t.s * 100)}%, ${Math.round(t.v * 50)}%)` : `hsl(0,0%,${Math.round(t.v * 100)}%)`;
+    $('targetChip').innerHTML = `<i style="background:${swatch}"></i> color capturado`;
+
+    pencil.calibrating = false; pencil.seen = 0; pencil.lost = 0; pencil.tipSmall = null; pencil.lifted = false;
+    pencilFx.reset(); pencilFy.reset();
+    updatePencilPanel();
+    toast('Lápiz calibrado ✏️');
+  }
+
+  /**
+   * Detecta la punta del lápiz:
+   *  1. Máscara HSV a 320 px de ancho.
+   *  2. Componentes conexos (BFS, 4 vecinos).
+   *  3. Puntuación = área × (×4 si está cerca de la punta anterior) × (×2 si está cerca de una mano).
+   *  4. Punta = promedio de los 6 píxeles de la mancha más lejanos a la palma
+   *     (o el centroide si no hay mano).
+   */
+  function trackPencil(infos) {
+    pctx.drawImage(video, 0, 0, PW, PH);
+    const d = pctx.getImageData(0, 0, PW, PH).data;
+    const T = pencil.target, tol = settings.colorTol, N = PW * PH;
+    const sMin = Math.max(0.22, T.s * 0.45), vMin = Math.max(0.15, T.v * 0.4), vTol = 0.06 + tol / 250;
+
+    for (let i = 0, j = 0; i < N; i++, j += 4) {
+      const r = d[j], g = d[j + 1], b = d[j + 2];
+      const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const delta = max - min, v = max / 255, s = max ? delta / max : 0;
+      let m = 0;
+      if (T.chromatic) {
+        if (s >= sMin && v >= vMin && delta) {
+          let h;
+          if (max === r) h = ((g - b) / delta) % 6; else if (max === g) h = (b - r) / delta + 2; else h = (r - g) / delta + 4;
+          h *= 60; if (h < 0) h += 360;
+          let dh = Math.abs(h - T.h); if (dh > 180) dh = 360 - dh;
+          m = dh <= tol ? 1 : 0;
+        }
+      } else {
+        m = (s < 0.25 && Math.abs(v - T.v) < vTol) ? 1 : 0;
+      }
+      mask[i] = m;
+    }
+
+    labels.fill(0);
+    const handsSmall = infos.map((h) => ({ x: h.palm.x * PW / W, y: h.palm.y * PH / H, r: h.handSize * PW / W }));
+    let best = null, label = 0;
+    const maxArea = N * 0.12;
+
+    for (let i = 0; i < N; i++) {
+      if (!mask[i] || labels[i]) continue;
+      label++;
+      let head = 0, tail = 0, area = 0, sx = 0, sy = 0, x0 = PW, x1 = 0, y0 = PH, y1 = 0;
+      bfsQueue[tail++] = i; labels[i] = label;
+      while (head < tail) {
+        const k = bfsQueue[head++], x = k % PW, y = (k - x) / PW;
+        area++; sx += x; sy += y;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (x > 0 && mask[k - 1] && !labels[k - 1]) { labels[k - 1] = label; bfsQueue[tail++] = k - 1; }
+        if (x < PW - 1 && mask[k + 1] && !labels[k + 1]) { labels[k + 1] = label; bfsQueue[tail++] = k + 1; }
+        if (y > 0 && mask[k - PW] && !labels[k - PW]) { labels[k - PW] = label; bfsQueue[tail++] = k - PW; }
+        if (y < PH - 1 && mask[k + PW] && !labels[k + PW]) { labels[k + PW] = label; bfsQueue[tail++] = k + PW; }
+      }
+      if (area < 3 || area > maxArea) continue;
+      const cx = sx / area, cy = sy / area;
+      let score = area, hand = null;
+      if (pencil.tipSmall && Math.hypot(cx - pencil.tipSmall.x, cy - pencil.tipSmall.y) < 40) score *= 4;
+      for (const h of handsSmall) {
+        if (Math.hypot(cx - h.x, cy - h.y) < h.r * 3) { score *= 2; hand = h; break; }
+      }
+      if (!best || score > best.score) best = { label, score, cx, cy, hand, x0, x1, y0, y1 };
+    }
+
+    renderMask(best ? best.label : -1);
+    if (!best) { pencil.tipSmall = null; return null; }
+
+    let tx = best.cx, ty = best.cy;
+    if (best.hand) {
+      const top = [];  // 6 píxeles más lejanos a la palma
+      for (let y = best.y0; y <= best.y1; y++) {
+        for (let x = best.x0; x <= best.x1; x++) {
+          if (labels[y * PW + x] !== best.label) continue;
+          const dd = (x - best.hand.x) ** 2 + (y - best.hand.y) ** 2;
+          if (top.length < 6) { top.push({ x, y, dd }); top.sort((a, b) => a.dd - b.dd); }
+          else if (dd > top[0].dd) { top[0] = { x, y, dd }; top.sort((a, b) => a.dd - b.dd); }
+        }
+      }
+      tx = top.reduce((s, q) => s + q.x, 0) / top.length;
+      ty = top.reduce((s, q) => s + q.y, 0) / top.length;
+    }
+    pencil.tipSmall = { x: tx, y: ty };
+    // +0.5 = centro del píxel; luego escalamos a la resolución completa
+    return { tip: { x: (tx + 0.5) * W / PW, y: (ty + 0.5) * H / PH } };
+  }
+
+  function renderMask(bestLabel) {
+    const px = maskImg.data;
+    for (let i = 0, j = 0; i < PW * PH; i++, j += 4) {
+      if (labels[i] === bestLabel && bestLabel > 0) { px[j] = 111; px[j + 1] = 240; px[j + 2] = 200; px[j + 3] = 255; }
+      else if (mask[i]) { px[j] = 255; px[j + 1] = 255; px[j + 2] = 255; px[j + 3] = 120; }
+      else { px[j + 3] = 0; }
+    }
+    prevCtx.putImageData(maskImg, 0, 0);
+  }
+
+  function drawPencilTarget() {
+    const c = { x: W / 2, y: H / 2 }, r = Math.max(3, Math.round(PW * 0.018)) * W / PW;
+    circle(c, r + 18, 'rgba(0,0,0,.25)', '#ffd34d', 3, [6, 6]);
+    circle(c, r, null, '#fff', 2);
+    octx.save(); octx.strokeStyle = 'rgba(255,255,255,.7)'; octx.lineWidth = 1.5;
+    octx.beginPath(); octx.moveTo(c.x - r - 34, c.y); octx.lineTo(c.x - r - 22, c.y); octx.moveTo(c.x + r + 22, c.y); octx.lineTo(c.x + r + 34, c.y);
+    octx.moveTo(c.x, c.y - r - 34); octx.lineTo(c.x, c.y - r - 22); octx.moveTo(c.x, c.y + r + 22); octx.lineTo(c.x, c.y + r + 34); octx.stroke();
+    octx.restore();
+  }
+
+  /**
+   * En modo lápiz, las manos LEJOS de la punta son "manos de control":
+   *   🖐️ abierta = pausa (levanta el lápiz) · 👆 L = el lápiz borra
+   *   🤟 = grosor · ✌️ 🤘 👍 = gestos sostenidos
+   * La mano que sostiene el lápiz se ignora para gestos.
+   */
+  function pencilFrame(infos, now) {
+    if (pencil.calibrating) {
+      drawPencilTarget();
+      pctx.drawImage(video, 0, 0, PW, PH);
+      setModeUI('PENCIL_CALIB'); showGauge(false);
+      return;
+    }
+    const det = trackPencil(infos);
+    const tip = det ? det.tip : null;
+    const cmd = infos.filter((h) => !tip || dist(h.palm, tip) > h.handSize * 2.2);
+    for (const h of infos) if (!cmd.includes(h)) h.hs.hold.g = null;
+
+    if (cmd.length === 2 && checkClear(cmd[0], cmd[1], now)) return;
+
+    let holdMode = null, pauseHand = false, eraseHand = false, sizeHand = null;
+    for (const h of cmd) {
+      const hm = handleHold(h, now); if (hm) holdMode = hm;
+      if (h.gesture === 'OPEN') pauseHand = true;
+      if (h.gesture === 'ERASE') eraseHand = true;
+      if (h.gesture === 'SIZE') sizeHand = h;
+    }
+    if (sizeHand) { adjustSize(sizeHand.pts[8].y); drawCursor(sizeHand.pts[8], 'SIZE'); }
+    showGauge(!!sizeHand);
+
+    let mode;
+    if (det) {
+      pencil.lost = 0; pencil.seen++;
+      const p = { x: pencilFx.filter(tip.x, now), y: pencilFy.filter(tip.y, now) };
+      const down = !pencil.lifted && !pauseHand && !sizeHand && !holdMode && pencil.seen >= 2;
+      if (eraseHand !== pencil.lastErase) { endStroke(); pencil.lastErase = eraseHand; }
+      if (down) strokePoint(p, eraseHand); else endStroke();
+      drawCursor(p, down ? (eraseHand ? 'ERASE' : 'DRAW') : 'PAUSE');
+      mode = down ? (eraseHand ? 'ERASE' : 'PENCIL') : 'PENCIL_UP';
+    } else {
+      pencil.seen = 0; pencil.lost++;
+      // Toleramos hasta 4 frames sin detección sin cortar el trazo
+      if (pencil.lost > 4) { endStroke(); pencilFx.reset(); pencilFy.reset(); }
+      mode = 'PENCIL_LOST';
+    }
+    setModeUI(holdMode || mode);
+  }
+
+  function togglePencil() {
+    if (state.phase !== 'ready') return;
+    endStroke(); endGrab(); fx.reset(); fy.reset(); pencilFx.reset(); pencilFy.reset();
+    pencil.active = !pencil.active;
+    if (pencil.active && !pencil.target) pencil.calibrating = true;
+    $('pencilBtn').classList.toggle('on', pencil.active);
+    $('pencilBtn').textContent = pencil.active ? '☝️ Dedo' : '✏️ Lápiz';
+    $('pencilPanel').classList.toggle('hidden', !pencil.active);
+    if (pencil.active) $('legend').classList.add('hidden');
+    updatePencilPanel();
+  }
+  function startRecalibration() { endStroke(); pencil.calibrating = true; updatePencilPanel(); }
+  function toggleLift() {
+    if (!pencil.active || pencil.calibrating) return;
+    pencil.lifted = !pencil.lifted; endStroke(); updatePencilPanel();
+  }
+  function updatePencilPanel() {
+    const cal = pencil.calibrating;
+    $('ppTitle').textContent = cal ? 'Calibrar lápiz' : 'Modo lápiz';
+    $('ppText').innerHTML = cal
+      ? 'Pon la <b>punta del lápiz</b> dentro del círculo amarillo del centro, que llene el círculo blanco, y presiona <b>Capturar color</b> (o <kbd>Enter</kbd>).'
+      : 'La zona verde es lo que se reconoce como punta. Abre la otra mano 🖐️ para pausar, haz la "L" 👆 para borrar o 🤟 para el grosor.';
+    $('captureBtn').style.display = cal ? '' : 'none';
+    $('liftBtn').style.display = cal ? 'none' : '';
+    $('recalBtn').style.display = cal ? 'none' : '';
+    $('targetChip').style.display = cal ? 'none' : '';
+    $('maskWrap').style.display = cal ? 'none' : '';
+    $('liftBtn').textContent = pencil.lifted ? 'Bajar lápiz' : 'Levantar lápiz';
+    $('liftBtn').classList.toggle('on', pencil.lifted);
+    if (cal) $('ppWarn').classList.remove('show');
+  }
+
+  // ============================== CALIBRACIÓN MANO ==============================
+  const CALIB_C = 2 * Math.PI * 54;
+  function updateCalibration(infos, dt) {
+    const info = infos.find((i) => i.fullOpen) || infos[0] || null;
+    const ok = !!(info && info.fullOpen);
+    state.calibProgress = clamp(state.calibProgress + (ok ? dt / CONFIG.CALIBRATION_MS : -dt / 1000), 0, 1);
+    $('calibBar').style.strokeDashoffset = CALIB_C * (1 - state.calibProgress);
+    if (ok) setCalib('Perfecto, mantén la mano quieta', `${Math.round(state.calibProgress * 100)}%`);
+    else if (info) setCalib('Abre más la mano', 'Estira y separa los 5 dedos, palma hacia la cámara');
+    else setCalib('Muestra tu mano abierta', 'Separa bien los 5 dedos frente a la cámara');
+    if (state.calibProgress >= 1) {
+      state.phase = 'ready';
+      $('calibScreen').classList.add('hidden');
+      $('legend').classList.remove('hidden');
+      toast('¡Mano detectada! Ya puedes dibujar ✋');
+    }
+  }
+  function setCalib(t, s) { $('calibTitle').textContent = t; $('calibSub').textContent = s; }
+
+  // ============================== BUCLE ==============================
+  let frames = 0, fpsT = performance.now(), lastVideoTime = -1;
+
+  function onResults(res, now) {
+    const dt = Math.min(now - state.lastT, 100);
+    state.lastT = now;
+    frames++;
+    if (now - fpsT > 1000) {
+      $('perf').textContent = `Rendimiento: ${Math.round(frames * 1000 / (now - fpsT))} fps de detección (${delegateUsed})`;
+      frames = 0; fpsT = now;
+    }
+
+    octx.clearRect(0, 0, W, H);
+    const lms = res.landmarks || [], wls = res.worldLandmarks || [];
+    const hds = res.handedness || res.handednesses || [];
+    const used = new Set();
+    const infos = lms.map((lm, i) => {
+      let key = hds[i] && hds[i][0] ? hds[i][0].categoryName : `H${i}`;
+      if (used.has(key)) key += i;
+      used.add(key);
+      return analyzeHand(lm, wls[i], key, now);
+    });
+    for (const [k, hs] of handStates) if (now - hs.seen > 600) handStates.delete(k);
+
+    if (settings.showSkeleton || state.phase === 'calibrating') {
+      for (const i of infos) drawSkeleton(i, i.fullOpen ? '#6ff0c8' : 'rgba(255,255,255,.75)');
+    }
+
+    if (state.phase === 'calibrating') { updateCalibration(infos, dt); return; }
+    if (state.phase !== 'ready') return;
+    if (photo.active) { setModeUI('COUNTDOWN'); return; }   // posando: no se dibuja nada
+    if (pencil.active) pencilFrame(infos, now); else fingerFrame(infos, now);
+  }
+
+  function loop() {
+    if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const now = performance.now();
+      try { onResults(landmarker.detectForVideo(video, now), now); }
+      catch (e) { console.error('Detección:', e); }
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ============================== UI ==============================
+  function updateColorUI() {
+    const c = COLORS[state.colorIdx];
+    $('swatch').style.background = c.hex; $('swatch').style.color = c.hex;
+    $('colorName').textContent = c.name;
+    $('sizeDot').style.background = c.hex;
+  }
+  function updateBrushUI() {
+    const b = BRUSHES[state.brushIdx];
+    $('brushIcon').textContent = b.icon; $('brushName').textContent = b.name;
+  }
+  let shownSize = -1;
+  function updateSizeUI() {
+    const s = Math.round(state.size);
+    if (s === shownSize) return;
+    shownSize = s;
+    const t = (s - CONFIG.MIN_SIZE) / (CONFIG.MAX_SIZE - CONFIG.MIN_SIZE);
+    $('sizeDot').style.width = $('sizeDot').style.height = `${3 + t * 31}px`;
+    $('sizeText').textContent = `${s} px`;
+    $('gaugeFill').style.height = `${t * 100}%`;
+    $('gaugeValue').textContent = `${s}px`;
+  }
+  function updateUndoUI() {
+    $('undoBtn').disabled = !history.length;
+    $('redoBtn').disabled = !redoStack.length;
+  }
+  function showGauge(on) { $('gauge').classList.toggle('show', on); }
+  function setModeUI(key) {
+    if (key === state.modeKey) return;
+    state.modeKey = key;
+    const [label, icon, color] = MODE_UI[key] || MODE_UI.PAUSE;
+    $('modeText').textContent = label; $('modeIcon').textContent = icon;
+    document.documentElement.style.setProperty('--mode', color);
+  }
+  let toastTimer = null;
+  function toast(msg, colorHex) {
+    const el = $('toast');
+    el.innerHTML = '';
+    if (colorHex) {
+      const sw = document.createElement('span');
+      sw.className = 'swatch'; sw.style.background = colorHex; sw.style.color = colorHex;
+      el.appendChild(sw);
+    }
+    el.appendChild(document.createTextNode(msg));
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1900);
+  }
+  function showError(msg) {
+    $('startScreen').classList.remove('hidden');
+    $('calibScreen').classList.add('hidden');
+    $('hud').classList.add('hidden');
+    $('errorBox').innerHTML = msg; $('errorBox').classList.add('show');
+    $('startBtn').disabled = false; $('startBtn').textContent = 'Reintentar';
+  }
+  // ============================== FOTO CON CUENTA REGRESIVA ==============================
+  /**
+   * Al confirmar la foto (👍 sostenido, botón 📸 o tecla S) se muestran
+   * 5 segundos de cuenta regresiva. Mientras tanto se pausa el dibujo y
+   * los gestos, para que puedas posar con las manos libremente sin
+   * pintar ni activar otras funciones. Al llegar a 0: flash + guardado.
+   */
+  const photo = { active: false, timer: null, cooldownUntil: 0 };
+
+  function showCount(n) {
+    const el = $('cdNum');
+    el.textContent = n;
+    el.classList.remove('pop');
+    void el.offsetWidth;            // reinicia la animación CSS
+    el.classList.add('pop');
+  }
+
+  function startPhotoCountdown() {
+    if (state.phase !== 'ready' || photo.active) return;
+    endStroke(); endGrab();
+    photo.active = true;
+    let n = PHOTO_SECONDS;
+    showCount(n);
+    $('countdown').classList.remove('hidden');
+    setModeUI('COUNTDOWN'); showGauge(false);
+    photo.timer = setInterval(() => {
+      n--;
+      if (n > 0) { showCount(n); return; }
+      finishPhoto(true);
+    }, 1000);
+  }
+
+  function finishPhoto(take) {
+    clearInterval(photo.timer);
+    $('countdown').classList.add('hidden');
+    photo.active = false;
+    photo.cooldownUntil = performance.now() + PHOTO_COOLDOWN_MS;
+    for (const hs of handStates.values()) hs.hold.g = null;
+    if (take) {
+      const f = $('flash');
+      f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+      saveImage();
+    } else {
+      toast('Foto cancelada');
+    }
+  }
+
+  function saveImage() {
+    if (state.phase !== 'ready') return;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    x.translate(W, 0); x.scale(-1, 1);       // deshacer espejo: se guarda como se ve
+    x.drawImage(video, 0, 0, W, H);
+    x.drawImage(drawCanvas, 0, 0);
+    const a = document.createElement('a');
+    a.download = `pintura-aire-${Date.now()}.png`;
+    a.href = c.toDataURL('image/png');
+    a.click();
+    toast('Foto guardada 📸');
+  }
+
+  // ============================== ARRANQUE ==============================
+  async function createLandmarker(vision, fileset, delegate) {
+    return vision.HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
+      runningMode: 'VIDEO',
+      numHands: 2,
+      minHandDetectionConfidence: 0.6,
+      minHandPresenceConfidence: 0.6,
+      minTrackingConfidence: 0.55,
+    });
+  }
+
+  async function start() {
+    const btn = $('startBtn');
+    btn.disabled = true; btn.textContent = 'Iniciando…';
+    $('errorBox').classList.remove('show');
+
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      showError('La cámara solo funciona en <b>localhost</b> o <b>HTTPS</b>. Abre este archivo con un servidor local (por ejemplo Live Server en VS Code).');
+      return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 }, facingMode: 'user' },
+        audio: false,
+      });
+    } catch (err) {
+      const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+      showError(denied
+        ? 'Se bloqueó el permiso de cámara. Habilítalo desde el ícono del candado en la barra de direcciones y vuelve a intentar.'
+        : `No se encontró una cámara disponible (${err?.name || 'error'}). Revisa que ninguna otra app la esté usando.`);
+      return;
+    }
+
+    video.srcObject = stream;
+    await video.play();
+    W = video.videoWidth || 1280; H = video.videoHeight || 720;
+    for (const c of [drawCanvas, overlay]) { c.width = W; c.height = H; }
+    initProcessing();
+
+    $('startScreen').classList.add('hidden');
+    $('calibScreen').classList.remove('hidden');
+    $('hud').classList.remove('hidden');
+    setModeUI('CALIB');
+    updateColorUI(); updateBrushUI(); updateSizeUI(); updateUndoUI(); applySmoothing();
+
+    try {
+      const vision = await import(`${TV_BASE}/vision_bundle.mjs`);
+      const fileset = await vision.FilesetResolver.forVisionTasks(`${TV_BASE}/wasm`);
+      try { landmarker = await createLandmarker(vision, fileset, 'GPU'); delegateUsed = 'GPU'; }
+      catch (gpuErr) {
+        console.warn('GPU no disponible, usando CPU:', gpuErr);
+        landmarker = await createLandmarker(vision, fileset, 'CPU'); delegateUsed = 'CPU';
+      }
+    } catch (e) {
+      console.error(e);
+      stream.getTracks().forEach((t) => t.stop());
+      showError('No se pudo cargar el modelo de MediaPipe. Revisa tu conexión a internet y recarga la página.');
+      return;
+    }
+
+    setCalib('Muestra tu mano abierta', 'Separa bien los 5 dedos frente a la cámara');
+    state.phase = 'calibrating';
+    loop();
+  }
+
+  // ============================== EVENTOS ==============================
+  $('startBtn').addEventListener('click', start);
+  $('clearBtn').addEventListener('click', clearAll);
+  $('saveBtn').addEventListener('click', startPhotoCountdown);
+  $('cdCancel').addEventListener('click', () => { if (photo.active) finishPhoto(false); });
+  $('undoBtn').addEventListener('click', undo);
+  $('redoBtn').addEventListener('click', redo);
+  $('pencilBtn').addEventListener('click', togglePencil);
+  $('captureBtn').addEventListener('click', capturePencilColor);
+  $('liftBtn').addEventListener('click', toggleLift);
+  $('recalBtn').addEventListener('click', startRecalibration);
+  $('helpBtn').addEventListener('click', () => $('legend').classList.toggle('hidden'));
+  $('settingsBtn').addEventListener('click', () => $('settings').classList.toggle('hidden'));
+
+  const bindRange = (id, outId, fn, fmt = (v) => v) => {
+    $(id).addEventListener('input', (e) => { const v = Number(e.target.value); fn(v); $(outId).textContent = fmt(v); });
+  };
+  bindRange('smooth', 'smoothOut', (v) => { settings.smoothing = v; applySmoothing(); });
+  bindRange('stab', 'stabOut', (v) => { settings.stability = v; });
+  bindRange('hold', 'holdOut', (v) => { settings.holdScale = v / 10; }, (v) => `${(v / 10).toFixed(1)}×`);
+  bindRange('tol', 'tolOut', (v) => { settings.colorTol = v; }, (v) => `${v}°`);
+  $('skeleton').addEventListener('change', (e) => { settings.showSkeleton = e.target.checked; });
+
+  window.addEventListener('keydown', (e) => {
+    if (state.phase !== 'ready' || e.target.tagName === 'INPUT') return;
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); toggleLift(); }
+    else if (k === 'enter' && pencil.calibrating) capturePencilColor();
+    else if (k === 'z') undo();
+    else if (k === 'y') redo();
+    else if (k === 'c') clearAll();
+    else if (k === 's') startPhotoCountdown();
+    else if (k === 'escape' && photo.active) finishPhoto(false);
+    else if (k === 'h') $('legend').classList.toggle('hidden');
+    else if (k === 'p') togglePencil();
+    else if (k === 'k') cycleColor();
+    else if (k === 'b') cycleBrush();
+  });
+})();
+</script>
+</body>
+</html>
