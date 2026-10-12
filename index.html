@@ -82,18 +82,6 @@
   .btn-primary { background: var(--draw); color: #08261d; border-color: transparent; }
   .btn-sq { min-width: 40px; }
 
-  /* ---------- MEDIDOR DE GROSOR ---------- */
-  .gauge {
-    position: fixed; right: 22px; top: 50%; transform: translateY(-50%);
-    height: 40vh; width: 70px; z-index: 15;
-    display: flex; flex-direction: column; align-items: center; gap: 8px;
-    opacity: 0; transition: opacity .2s ease; pointer-events: none;
-  }
-  .gauge.show { opacity: 1; }
-  .gauge-track { flex: 1; width: 16px; border-radius: 999px; position: relative; overflow: hidden; background: var(--ink); border: 1px solid var(--line); }
-  .gauge-fill { position: absolute; bottom: 0; left: 0; right: 0; height: 0%; background: linear-gradient(to top, var(--size), #fff3c2); border-radius: 999px; }
-  .gauge-value { font-weight: 800; font-size: 18px; color: var(--size); background: var(--ink); padding: 4px 10px; border-radius: 10px; }
-  .gauge-hint { font-size: 12px; color: var(--muted); text-align: center; text-shadow: 0 1px 6px #000; }
 
   /* ---------- PANELES ---------- */
   .panel {
@@ -121,6 +109,22 @@
   .settings input[type=range] { width: 100%; accent-color: var(--draw); }
   .settings small { display: block; color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 2px; }
   .settings .check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 10px; cursor: pointer; }
+  .settings h3 { font-size: 13px; font-weight: 800; color: var(--muted); margin: 4px 0 8px; }
+  .settings .sep { border-top: 1px solid var(--line); margin: 6px 0 12px; }
+  .palette { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-bottom: 10px; }
+  .chip {
+    aspect-ratio: 1; border-radius: 50%; border: 2px solid rgba(255,255,255,.25);
+    cursor: pointer; padding: 0; transition: transform .1s ease;
+  }
+  .chip:hover { transform: scale(1.12); }
+  .chip.sel { border-color: #fff; box-shadow: 0 0 0 2px var(--draw); }
+  .custom-color { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 14px; cursor: pointer; }
+  .custom-color input { width: 36px; height: 28px; border: none; background: none; cursor: pointer; padding: 0; }
+  .size-preview { height: 104px; display: grid; place-items: center; border-radius: 12px; background: rgba(255,255,255,.05); margin-bottom: 6px; }
+  .size-preview div { border-radius: 50%; }
+  .settings { max-height: calc(100vh - 140px); overflow-y: auto; }
+  .hud-btn { background: none; border: none; color: inherit; cursor: pointer; border-radius: 12px; padding: 2px 4px; text-align: left; }
+  .hud-btn:hover { background: rgba(255,255,255,.08); }
   .settings .perf { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
 
   .pencil-panel { right: 16px; bottom: 16px; width: 340px; }
@@ -222,15 +226,15 @@
 
 <!-- ======================= HUD ======================= -->
 <header class="hud hidden" id="hud">
-  <div class="hud-item" title="Color actual">
+  <button class="hud-item hud-btn" id="hudColor" title="Elegir color">
     <div class="swatch" id="swatch"></div>
     <div class="hud-text"><span class="hud-label">Color</span><span class="hud-value" id="colorName">Rojo</span></div>
-  </div>
+  </button>
   <div class="divider"></div>
-  <div class="hud-item" title="Grosor actual">
+  <button class="hud-item hud-btn" id="hudSize" title="Cambiar grosor">
     <div class="size-box"><div class="size-dot" id="sizeDot"></div></div>
     <div class="hud-text"><span class="hud-label">Grosor</span><span class="hud-value" id="sizeText">8 px</span></div>
-  </div>
+  </button>
   <div class="divider"></div>
   <div class="hud-item" title="Tipo de pincel">
     <div class="brush-icon" id="brushIcon">🖊️</div>
@@ -252,12 +256,6 @@
   </div>
 </header>
 
-<div class="gauge" id="gauge" aria-hidden="true">
-  <div class="gauge-value" id="gaugeValue">8px</div>
-  <div class="gauge-track"><div class="gauge-fill" id="gaugeFill"></div></div>
-  <div class="gauge-hint">Sube la mano para engrosar</div>
-</div>
-
 <!-- ======================= LEYENDA ======================= -->
 <aside class="panel legend hidden" id="legend">
   <h2>Gestos</h2>
@@ -265,7 +263,6 @@
     <li><span class="g">☝️</span><span><b>Solo índice</b><small>Dibujar</small></span></li>
     <li><span class="g">✊</span><span><b>Puño o mano abierta</b><small>Pausa: mueve sin pintar</small></span></li>
     <li><span class="g">✌️</span><span><b>Índice + medio</b><small>Mantén para cambiar color</small></span></li>
-    <li><span class="g">🤟</span><span><b>Índice + medio + anular</b><small>Grosor: sube o baja la mano (2–100 px)</small></span></li>
     <li><span class="g">👆</span><span><b>Pulgar + índice en "L"</b><small>Borrador</small></span></li>
     <li><span class="g">🤘</span><span><b>Índice + meñique</b><small>Mantén para cambiar pincel</small></span></li>
     <li><span class="g">👌</span><span><b>Gesto OK (pinza)</b><small>Agarra y mueve todo el dibujo</small></span></li>
@@ -281,7 +278,24 @@
 
 <!-- ======================= AJUSTES ======================= -->
 <aside class="panel settings hidden" id="settings">
-  <h2>Ajustes de precisión</h2>
+  <h2>Ajustes</h2>
+  <h3>Color</h3>
+  <div class="palette" id="palette"></div>
+  <label class="custom-color"><input type="color" id="customColor" value="#00e5ff"> Otro color personalizado</label>
+  <h3>Grosor</h3>
+  <div class="size-preview"><div id="sizePreview"></div></div>
+  <div class="row">
+    <div class="row-head"><span>Grosor del pincel</span><output id="sizeOut">8 px</output></div>
+    <input type="range" id="sizeRange" min="2" max="100" value="8">
+    <small>De 2 px (trazo fino) a 100 px (fondos). Atajos: <kbd>[</kbd> y <kbd>]</kbd>.</small>
+  </div>
+  <div class="sep"></div>
+  <h3>Precisión</h3>
+  <div class="row">
+    <div class="row-head"><span>Estabilizador de trazo</span><output id="lazyOut">8 px</output></div>
+    <input type="range" id="lazy" min="0" max="30" value="8">
+    <small>El pincel sigue al dedo como si lo jalaras con un hilo corto: elimina el temblor. 0 = sin estabilizador.</small>
+  </div>
   <div class="row">
     <div class="row-head"><span>Suavizado del trazo</span><output id="smoothOut">5</output></div>
     <input type="range" id="smooth" min="1" max="10" value="5">
@@ -409,13 +423,22 @@
     PROC_W: 320,          // ancho de procesamiento del modo lápiz
   };
 
-  const settings = { smoothing: 5, stability: 5, holdScale: 1, colorTol: 16, showSkeleton: false };
+  const settings = { smoothing: 5, stability: 5, holdScale: 1, colorTol: 16, showSkeleton: false, lazyRadius: 8 };
 
+  // 16 colores. El gesto ✌️ los recorre en este orden.
   const COLORS = [
-    { name: 'Rojo', hex: '#ff3b3b' }, { name: 'Verde', hex: '#22e06b' },
-    { name: 'Azul', hex: '#2f7bff' }, { name: 'Amarillo', hex: '#ffd60a' },
-    { name: 'Blanco', hex: '#ffffff' }, { name: 'Magenta', hex: '#ff2bd6' },
+    { name: 'Rojo', hex: '#ff3b3b' },      { name: 'Naranja', hex: '#ff8a1f' },
+    { name: 'Amarillo', hex: '#ffd60a' },  { name: 'Lima', hex: '#b6f23a' },
+    { name: 'Verde', hex: '#22e06b' },     { name: 'Turquesa', hex: '#1fd6b4' },
+    { name: 'Cian', hex: '#21d4fd' },      { name: 'Azul', hex: '#2f7bff' },
+    { name: 'Índigo', hex: '#5b4bff' },    { name: 'Violeta', hex: '#9d4dff' },
+    { name: 'Magenta', hex: '#ff2bd6' },   { name: 'Rosa', hex: '#ff8fc7' },
+    { name: 'Café', hex: '#8b5a2b' },      { name: 'Blanco', hex: '#ffffff' },
+    { name: 'Gris', hex: '#8f96a3' },      { name: 'Negro', hex: '#111111' },
   ];
+  /** Color activo: de la paleta, o personalizado si colorIdx === -1. */
+  const currentColor = () => state.colorIdx >= 0 ? COLORS[state.colorIdx] : { name: 'Personalizado', hex: state.customHex };
+  const nextColorIdx = () => (state.colorIdx + 1) % COLORS.length;
   const BRUSHES = [
     { id: 'normal',  name: 'Normal',     icon: '🖊️' },
     { id: 'neon',    name: 'Neón',       icon: '💡' },
@@ -428,7 +451,6 @@
     DRAW:   ['Dibujando', '✍️', 'var(--draw)'],
     ERASE:  ['Borrando', '🧽', 'var(--erase)'],
     COLOR:  ['Cambiando color', '🎨', 'var(--color)'],
-    SIZE:   ['Ajustando grosor', '📏', 'var(--size)'],
     BRUSH:  ['Cambiando pincel', '🖌️', 'var(--color)'],
     SAVE:   ['Confirmando foto', '📸', '#ffffff'],
     COUNTDOWN: ['¡Posa para la foto!', '📸', '#ffffff'],
@@ -445,14 +467,14 @@
 
   // Gestos que se activan manteniéndolos (con anillo de progreso)
   const HOLDS = {
-    COLOR: { ms: 1500, icon: '🎨', ring: () => COLORS[(state.colorIdx + 1) % COLORS.length].hex, action: () => cycleColor() },
+    COLOR: { ms: 1500, icon: '🎨', ring: () => COLORS[nextColorIdx()].hex, action: () => cycleColor() },
     BRUSH: { ms: 1000, icon: '🖌️', ring: () => '#c89bff', action: () => cycleBrush() },
     // 👍 confirma la foto y arranca la cuenta regresiva de 5 s
     SAVE:  { ms: 1500, icon: '📸', ring: () => '#ffffff', action: () => startPhotoCountdown() },
   };
   const PHOTO_SECONDS = 5;
   const PHOTO_COOLDOWN_MS = 2500;   // evita otra foto si el pulgar sigue arriba
-  const POINTER_GESTURES = new Set(['DRAW', 'ERASE', 'GRAB', 'SIZE']);
+  const POINTER_GESTURES = new Set(['DRAW', 'ERASE', 'GRAB']);
 
   const HAND_CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
     [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
@@ -469,7 +491,7 @@
 
   // ============================== ESTADO ==============================
   const state = {
-    phase: 'idle', colorIdx: 0, brushIdx: 0, size: 8,
+    phase: 'idle', colorIdx: 0, customHex: '#00e5ff', brushIdx: 0, size: 8,
     calibProgress: 0, lastT: performance.now(),
     stroke: { last: null, lastMid: null, dist: 0, hue: 0 },
     primaryKey: null, primaryGesture: null,
@@ -526,6 +548,35 @@
   const fx = new OneEuroFilter(), fy = new OneEuroFilter();
   const pencilFx = new OneEuroFilter(), pencilFy = new OneEuroFilter();
   const ALL_FILTERS = [fx, fy, pencilFx, pencilFy];
+
+  /**
+   * SUAVIZADO EN DOS ETAPAS
+   * 1) One Euro (arriba): quita el ruido de alta frecuencia del detector.
+   * 2) ESTABILIZADOR "lazy brush" (como en Krita/Procreate): el pincel
+   *    está atado al dedo con un hilo de radio R. Mientras el dedo se
+   *    mueve dentro de ese radio, el pincel NO se mueve (adiós temblor);
+   *    cuando lo supera, el pincel es arrastrado justo lo necesario:
+   *      d = |dedo − pincel|;  si d > R:  pincel += (dedo − pincel)·(d − R)/d
+   *    Esto produce curvas muy limpias sin el retraso de un suavizado fuerte.
+   * Además, el tiempo de cada frame viene de requestVideoFrameCallback
+   * (momento real de captura), así el filtro calcula velocidades exactas.
+   */
+  class PointerSmoother {
+    constructor(filterX, filterY) { this.fx = filterX; this.fy = filterY; this.reset(); }
+    reset() { this.fx.reset(); this.fy.reset(); this.bx = null; this.by = null; this.raw = null; }
+    update(x, y, t) {
+      const sx = this.fx.filter(x, t), sy = this.fy.filter(y, t);
+      this.raw = { x: sx, y: sy };
+      if (this.bx === null) { this.bx = sx; this.by = sy; }
+      const R = settings.lazyRadius * W / 1280;      // radio relativo a la resolución
+      const dx = sx - this.bx, dy = sy - this.by, d = Math.hypot(dx, dy);
+      if (d > R) { const k = (d - R) / d; this.bx += dx * k; this.by += dy * k; }
+      return { x: this.bx, y: this.by };
+    }
+  }
+  const fingerSm = new PointerSmoother(fx, fy);
+  const pencilSm = new PointerSmoother(pencilFx, pencilFy);
+  let frameT = 0;   // marca de tiempo exacta del frame de video (ms)
 
   /** Suavizado 1..10 -> parámetros del filtro (curva exponencial). */
   function applySmoothing() {
@@ -592,7 +643,6 @@
     if (hs.pinch && M && R && P)            raw = 'GRAB';    // 👌
     else if (I && M && R && P)              raw = 'OPEN';    // 🖐️
     else if (!I && !M && !R && !P)          raw = thumbUp ? 'SAVE' : 'FIST'; // 👍 / ✊
-    else if (I && M && R && !P)             raw = 'SIZE';    // 3 dedos
     else if (I && M && !R && !P)            raw = 'COLOR';   // ✌️
     else if (I && !M && !R && P)            raw = 'BRUSH';   // 🤘
     else if (I && !M && !R && !P)           raw = (thumb && lAngle > CONFIG.L_ANGLE) ? 'ERASE' : 'DRAW';
@@ -661,7 +711,7 @@
     if (BRUSHES[state.brushIdx].id === 'rainbow') {
       return `hsl(${(state.stroke.hue + state.stroke.dist * 0.45) % 360}, 100%, 58%)`;
     }
-    return COLORS[state.colorIdx].hex;
+    return currentColor().hex;
   }
   const eraserSize = () => Math.max(40, state.size * 1.5);
 
@@ -760,9 +810,9 @@
 
   // ============================== ACCIONES ==============================
   function cycleColor() {
-    state.colorIdx = (state.colorIdx + 1) % COLORS.length;
+    state.colorIdx = nextColorIdx();
     updateColorUI();
-    const c = COLORS[state.colorIdx];
+    const c = currentColor();
     toast(`Color: ${c.name}`, c.hex);
   }
   function cycleBrush() {
@@ -772,11 +822,9 @@
     toast(`Pincel: ${b.name} ${b.icon}`);
   }
 
-  /** Grosor por altura: t = (0.85 − y)/0.70 ; grosor = 2 + t^1.5 · 98 (más fino = más precisión). */
-  function adjustSize(y) {
-    const t = clamp((0.85 - y / H) / 0.70, 0, 1);
-    const target = CONFIG.MIN_SIZE + Math.pow(t, 1.5) * (CONFIG.MAX_SIZE - CONFIG.MIN_SIZE);
-    state.size += (target - state.size) * 0.25;
+  /** Grosor manual (slider de Ajustes o teclas [ ]). */
+  function setSize(v) {
+    state.size = clamp(Math.round(v), CONFIG.MIN_SIZE, CONFIG.MAX_SIZE);
     updateSizeUI();
   }
 
@@ -815,7 +863,7 @@
   function checkClear(a, b, now) {
     if (a.gesture !== 'OPEN' || b.gesture !== 'OPEN') { state.clearHoldStart = null; return false; }
     if (dist(a.palm, b.palm) > (a.handSize + b.handSize) / 2 * 2.8) { state.clearHoldStart = null; return false; }
-    endStroke(); setModeUI('CLEAR'); showGauge(false);
+    endStroke(); setModeUI('CLEAR');
     if (now < state.clearCooldownUntil) return true;
     if (!state.clearHoldStart) state.clearHoldStart = now;
     const prog = clamp((now - state.clearHoldStart) / CONFIG.CLEAR_HOLD_MS, 0, 1);
@@ -852,14 +900,22 @@
     octx.restore();
   }
   function drawCursor(p, kind) {
-    const color = COLORS[state.colorIdx].hex;
+    const color = currentColor().hex;
     switch (kind) {
       case 'DRAW':  circle(p, Math.max(3, state.size / 2), color, 'rgba(255,255,255,.9)', 2); break;
       case 'ERASE': circle(p, eraserSize() / 2, 'rgba(255,148,102,.18)', '#fff', 2.5, [8, 6]); break;
-      case 'SIZE':  circle(p, state.size / 2, color + '66', '#fff', 2); circle(p, 3, '#fff'); break;
       case 'GRAB':  circle(p, 22, 'rgba(255,211,77,.2)', '#ffd34d', 3); drawLabel(p, '✋', 20); break;
       default:      circle(p, 11, null, 'rgba(255,255,255,.95)', 2.5); circle(p, 3, '#fff');
     }
+  }
+  /** Hilo del estabilizador: une la posición real del dedo con el pincel. */
+  function drawString(sm, p, kind) {
+    if (!sm.raw || settings.lazyRadius === 0 || (kind !== 'DRAW' && kind !== 'ERASE')) return;
+    octx.save();
+    octx.strokeStyle = 'rgba(255,255,255,.55)'; octx.lineWidth = 1.5; octx.setLineDash([3, 4]);
+    octx.beginPath(); octx.moveTo(sm.raw.x, sm.raw.y); octx.lineTo(p.x, p.y); octx.stroke();
+    octx.restore();
+    circle(sm.raw, 3, 'rgba(255,255,255,.8)');
   }
   function drawSkeleton(info, color) {
     octx.save();
@@ -886,16 +942,16 @@
 
   function fingerFrame(infos, now) {
     if (!infos.length) {
-      endStroke(); endGrab(); fx.reset(); fy.reset();
+      endStroke(); endGrab(); fingerSm.reset();
       state.primaryKey = null; state.primaryGesture = null;
-      setModeUI('NOHAND'); showGauge(false);
+      setModeUI('NOHAND');
       return;
     }
     if (infos.length === 2 && checkClear(infos[0], infos[1], now)) return;
 
     const primary = pickPrimary(infos);
     if (primary.key !== state.primaryKey) {
-      endStroke(); endGrab(); fx.reset(); fy.reset();
+      endStroke(); endGrab(); fingerSm.reset();
       state.primaryKey = primary.key; state.primaryGesture = null;
     }
 
@@ -904,22 +960,22 @@
 
     const g = primary.gesture;
     if (g !== state.primaryGesture) {       // al cambiar de gesto: cortar trazo y reiniciar filtro
-      endStroke(); endGrab(); fx.reset(); fy.reset();
+      endStroke(); endGrab(); fingerSm.reset();
       state.primaryGesture = g;
     }
 
     const src = g === 'GRAB' ? midP(primary.pts[4], primary.pts[8]) : primary.pts[8];
-    const p = { x: fx.filter(src.x, now), y: fy.filter(src.y, now) };
+    const p = fingerSm.update(src.x, src.y, frameT);
     const mode = gestureToMode(g);
 
     switch (g) {
       case 'DRAW':  strokePoint(p, false); break;
       case 'ERASE': strokePoint(p, true); break;
-      case 'SIZE':  adjustSize(p.y); break;
-      case 'GRAB':  if (!state.grab) startGrab(p); moveGrab(p); break;
+      case 'GRAB':  { const q = fingerSm.raw; if (!state.grab) startGrab(q); moveGrab(q); break; }  // agarrar: sin hilo, respuesta directa
     }
-    if (!HOLDS[g]) drawCursor(p, mode);
-    showGauge(g === 'SIZE');
+    // Dibujando/borrando: cursor en el pincel estabilizado; en otros modos: en el dedo
+    const shown = (g === 'DRAW' || g === 'ERASE') ? p : fingerSm.raw;
+    if (!HOLDS[g]) { drawString(fingerSm, p, mode); drawCursor(shown, mode); }
     setModeUI(holdMode || mode);
   }
 
@@ -990,7 +1046,7 @@
     $('targetChip').innerHTML = `<i style="background:${swatch}"></i> color capturado`;
 
     pencil.calibrating = false; pencil.seen = 0; pencil.lost = 0; pencil.tipSmall = null; pencil.lifted = false;
-    pencilFx.reset(); pencilFy.reset();
+    pencilSm.reset();
     updatePencilPanel();
     toast('Lápiz calibrado ✏️');
   }
@@ -1103,14 +1159,14 @@
   /**
    * En modo lápiz, las manos LEJOS de la punta son "manos de control":
    *   🖐️ abierta = pausa (levanta el lápiz) · 👆 L = el lápiz borra
-   *   🤟 = grosor · ✌️ 🤘 👍 = gestos sostenidos
+   *   ✌️ 🤘 👍 = gestos sostenidos
    * La mano que sostiene el lápiz se ignora para gestos.
    */
   function pencilFrame(infos, now) {
     if (pencil.calibrating) {
       drawPencilTarget();
       pctx.drawImage(video, 0, 0, PW, PH);
-      setModeUI('PENCIL_CALIB'); showGauge(false);
+      setModeUI('PENCIL_CALIB');
       return;
     }
     const det = trackPencil(infos);
@@ -1120,29 +1176,27 @@
 
     if (cmd.length === 2 && checkClear(cmd[0], cmd[1], now)) return;
 
-    let holdMode = null, pauseHand = false, eraseHand = false, sizeHand = null;
+    let holdMode = null, pauseHand = false, eraseHand = false;
     for (const h of cmd) {
       const hm = handleHold(h, now); if (hm) holdMode = hm;
       if (h.gesture === 'OPEN') pauseHand = true;
       if (h.gesture === 'ERASE') eraseHand = true;
-      if (h.gesture === 'SIZE') sizeHand = h;
     }
-    if (sizeHand) { adjustSize(sizeHand.pts[8].y); drawCursor(sizeHand.pts[8], 'SIZE'); }
-    showGauge(!!sizeHand);
 
     let mode;
     if (det) {
       pencil.lost = 0; pencil.seen++;
-      const p = { x: pencilFx.filter(tip.x, now), y: pencilFy.filter(tip.y, now) };
-      const down = !pencil.lifted && !pauseHand && !sizeHand && !holdMode && pencil.seen >= 2;
+      const p = pencilSm.update(tip.x, tip.y, frameT);
+      const down = !pencil.lifted && !pauseHand && !holdMode && pencil.seen >= 2;
       if (eraseHand !== pencil.lastErase) { endStroke(); pencil.lastErase = eraseHand; }
       if (down) strokePoint(p, eraseHand); else endStroke();
-      drawCursor(p, down ? (eraseHand ? 'ERASE' : 'DRAW') : 'PAUSE');
+      const ck = down ? (eraseHand ? 'ERASE' : 'DRAW') : 'PAUSE';
+      drawString(pencilSm, p, ck); drawCursor(down ? p : pencilSm.raw, ck);
       mode = down ? (eraseHand ? 'ERASE' : 'PENCIL') : 'PENCIL_UP';
     } else {
       pencil.seen = 0; pencil.lost++;
       // Toleramos hasta 4 frames sin detección sin cortar el trazo
-      if (pencil.lost > 4) { endStroke(); pencilFx.reset(); pencilFy.reset(); }
+      if (pencil.lost > 4) { endStroke(); pencilSm.reset(); }
       mode = 'PENCIL_LOST';
     }
     setModeUI(holdMode || mode);
@@ -1150,7 +1204,7 @@
 
   function togglePencil() {
     if (state.phase !== 'ready') return;
-    endStroke(); endGrab(); fx.reset(); fy.reset(); pencilFx.reset(); pencilFy.reset();
+    endStroke(); endGrab(); fingerSm.reset(); pencilSm.reset();
     pencil.active = !pencil.active;
     if (pencil.active && !pencil.target) pencil.calibrating = true;
     $('pencilBtn').classList.toggle('on', pencil.active);
@@ -1169,7 +1223,7 @@
     $('ppTitle').textContent = cal ? 'Calibrar lápiz' : 'Modo lápiz';
     $('ppText').innerHTML = cal
       ? 'Pon la <b>punta del lápiz</b> dentro del círculo amarillo del centro, que llene el círculo blanco, y presiona <b>Capturar color</b> (o <kbd>Enter</kbd>).'
-      : 'La zona verde es lo que se reconoce como punta. Abre la otra mano 🖐️ para pausar, haz la "L" 👆 para borrar o 🤟 para el grosor.';
+      : 'La zona verde es lo que se reconoce como punta. Abre la otra mano 🖐️ para pausar, o haz la "L" 👆 para borrar. El grosor se cambia en ⚙️ Ajustes.';
     $('captureBtn').style.display = cal ? '' : 'none';
     $('liftBtn').style.display = cal ? 'none' : '';
     $('recalBtn').style.display = cal ? 'none' : '';
@@ -1233,22 +1287,55 @@
     if (pencil.active) pencilFrame(infos, now); else fingerFrame(infos, now);
   }
 
+  /**
+   * Bucle de detección. Si el navegador soporta requestVideoFrameCallback,
+   * procesamos EXACTAMENTE una vez por cada frame nuevo de la cámara y
+   * usamos su tiempo real de captura (mediaTime); así no se procesan
+   * frames repetidos ni se calculan velocidades con tiempos imprecisos.
+   */
+  const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  let lastDetectT = 0;
+  function processFrame(mediaMs) {
+    const now = performance.now();
+    frameT = mediaMs;
+    const ts = Math.max(now, lastDetectT + 1);   // detectForVideo exige tiempos crecientes
+    lastDetectT = ts;
+    try { onResults(landmarker.detectForVideo(video, ts), now); }
+    catch (e) { console.error('Detección:', e); }
+  }
   function loop() {
+    if (hasRVFC) {
+      video.requestVideoFrameCallback((_, meta) => {
+        processFrame(meta && typeof meta.mediaTime === 'number' ? meta.mediaTime * 1000 : performance.now());
+        loop();
+      });
+      return;
+    }
     if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
       lastVideoTime = video.currentTime;
-      const now = performance.now();
-      try { onResults(landmarker.detectForVideo(video, now), now); }
-      catch (e) { console.error('Detección:', e); }
+      processFrame(performance.now());
     }
     requestAnimationFrame(loop);
   }
 
   // ============================== UI ==============================
   function updateColorUI() {
-    const c = COLORS[state.colorIdx];
+    const c = currentColor();
     $('swatch').style.background = c.hex; $('swatch').style.color = c.hex;
     $('colorName').textContent = c.name;
     $('sizeDot').style.background = c.hex;
+    $('sizePreview').style.background = c.hex;
+    document.querySelectorAll('.chip').forEach((el, i) => el.classList.toggle('sel', i === state.colorIdx));
+  }
+  function buildPalette() {
+    const pal = $('palette');
+    COLORS.forEach((c, i) => {
+      const b = document.createElement('button');
+      b.className = 'chip'; b.style.background = c.hex;
+      b.title = c.name; b.setAttribute('aria-label', c.name);
+      b.addEventListener('click', () => { state.colorIdx = i; updateColorUI(); toast(`Color: ${c.name}`, c.hex); });
+      pal.appendChild(b);
+    });
   }
   function updateBrushUI() {
     const b = BRUSHES[state.brushIdx];
@@ -1262,14 +1349,15 @@
     const t = (s - CONFIG.MIN_SIZE) / (CONFIG.MAX_SIZE - CONFIG.MIN_SIZE);
     $('sizeDot').style.width = $('sizeDot').style.height = `${3 + t * 31}px`;
     $('sizeText').textContent = `${s} px`;
-    $('gaugeFill').style.height = `${t * 100}%`;
-    $('gaugeValue').textContent = `${s}px`;
+    $('sizeOut').textContent = `${s} px`;
+    $('sizeRange').value = s;
+    const pv = Math.max(2, s);
+    $('sizePreview').style.width = $('sizePreview').style.height = `${pv}px`;
   }
   function updateUndoUI() {
     $('undoBtn').disabled = !history.length;
     $('redoBtn').disabled = !redoStack.length;
   }
-  function showGauge(on) { $('gauge').classList.toggle('show', on); }
   function setModeUI(key) {
     if (key === state.modeKey) return;
     state.modeKey = key;
@@ -1322,7 +1410,7 @@
     let n = PHOTO_SECONDS;
     showCount(n);
     $('countdown').classList.remove('hidden');
-    setModeUI('COUNTDOWN'); showGauge(false);
+    setModeUI('COUNTDOWN');
     photo.timer = setInterval(() => {
       n--;
       if (n > 0) { showCount(n); return; }
@@ -1441,10 +1529,17 @@
   $('recalBtn').addEventListener('click', startRecalibration);
   $('helpBtn').addEventListener('click', () => $('legend').classList.toggle('hidden'));
   $('settingsBtn').addEventListener('click', () => $('settings').classList.toggle('hidden'));
+  $('hudColor').addEventListener('click', () => $('settings').classList.remove('hidden'));
+  $('hudSize').addEventListener('click', () => $('settings').classList.remove('hidden'));
+  $('customColor').addEventListener('input', (e) => { state.colorIdx = -1; state.customHex = e.target.value; updateColorUI(); });
+  $('customColor').addEventListener('change', () => toast('Color personalizado', state.customHex));
+  buildPalette();
 
   const bindRange = (id, outId, fn, fmt = (v) => v) => {
     $(id).addEventListener('input', (e) => { const v = Number(e.target.value); fn(v); $(outId).textContent = fmt(v); });
   };
+  $('sizeRange').addEventListener('input', (e) => setSize(Number(e.target.value)));
+  bindRange('lazy', 'lazyOut', (v) => { settings.lazyRadius = v; }, (v) => v ? `${v} px` : 'apagado');
   bindRange('smooth', 'smoothOut', (v) => { settings.smoothing = v; applySmoothing(); });
   bindRange('stab', 'stabOut', (v) => { settings.stability = v; });
   bindRange('hold', 'holdOut', (v) => { settings.holdScale = v / 10; }, (v) => `${(v / 10).toFixed(1)}×`);
@@ -1465,6 +1560,8 @@
     else if (k === 'p') togglePencil();
     else if (k === 'k') cycleColor();
     else if (k === 'b') cycleBrush();
+    else if (k === '[') setSize(state.size - (state.size > 20 ? 5 : 1));
+    else if (k === ']') setSize(state.size + (state.size >= 20 ? 5 : 1));
   });
 })();
 </script>
